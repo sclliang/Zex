@@ -22,6 +22,7 @@ public:
     bool findNext(bool backwards = false);
     void clearSearch();
     int matchCount() const { return matches_.size(); }
+    bool searchBusy() const { return counting_ || navigating_; }
     QString matchSummary() const;
     QString selectedText() const;
     QString positionSummary() const;
@@ -41,6 +42,9 @@ protected:
 private:
     void configureLanguage(const QString& path, bool large);
     void countMatches();
+    sptr_t searchChunk(sptr_t& cursor, sptr_t limit, bool backwards, bool& done);
+    bool beginNavigation(bool backwards, bool includeSelection);
+    void advanceNavigation();
     void updateMargins();
     void updateBraces();
     void applyTypography();
@@ -57,4 +61,10 @@ private:
     QVector<QPair<sptr_t, sptr_t>> matches_;
     bool counting_ = false;
     bool capped_ = false;
+    bool navigating_ = false;
+    bool navigationBackwards_ = false;
+    bool navigationWrapped_ = false;
+    bool navigationFound_ = false;
+    sptr_t navigationAt_ = 0, navigationOrigin_ = 0, navigationLimit_ = 0;
+    sptr_t navigationCaret_ = 0, navigationAnchor_ = 0;
 };

@@ -17,6 +17,7 @@
 #include <QSettings>
 #include <QPointer>
 #include <QMessageBox>
+#include <QScreen>
 #include <QWindow>
 #include <windows.h>
 
@@ -32,7 +33,7 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
     QCoreApplication::setLibraryPaths({plugins});
     qputenv("QT_PLUGIN_PATH",plugins.toUtf8());
     QApplication app(argc,argv);
-    app.setApplicationName("Zex");app.setOrganizationName("sixunited");app.setApplicationVersion("0.5.0.0");
+    app.setApplicationName("Zex");app.setOrganizationName("sixunited");app.setApplicationVersion("0.5.1.0");
     QThreadPool::globalInstance()->setMaxThreadCount(qMax(2,qMin(4,QThread::idealThreadCount())));
     QString reportPath,capturePath,searchText,sessionFile,verifyTheme,appearanceCapture;
     QPointer<AppearanceDialog> appearanceDialog;
@@ -60,6 +61,8 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
     }
     QSettings preferences("sixunited","Zex");
     Theme::apply(app,!verifyTheme.isEmpty()?verifyTheme:testMode?"graphite":Theme::storedTheme(preferences));
+    QTimer uiPulse;QElapsedTimer pulseClock;int maxUiGap=0,maxReadyUiGap=0;qint64 shellReadyMs=0;bool measuringReady=false;
+    if(testMode){pulseClock.start();uiPulse.setInterval(16);QObject::connect(&uiPulse,&QTimer::timeout,&app,[&]{const auto gap=int(pulseClock.restart());maxUiGap=qMax(maxUiGap,gap);if(measuringReady)maxReadyUiGap=qMax(maxReadyUiGap,gap);});uiPulse.start();}
     MainWindow window(testMode,sessionFile);
     FileReceiver receiver;
     QObject::connect(&receiver,&FileReceiver::filesRequested,&window,&MainWindow::receiveFiles);
@@ -80,9 +83,11 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
         poll->setInterval(30);
         auto completed=std::make_shared<bool>(false);
         QObject::connect(poll,&QTimer::timeout,&window,[&,poll,completed,reportPath,capturePath,searchText]{
+            if(!shellReadyMs && window.windowHandle()->isExposed())shellReadyMs=GetTickCount64()-launchTick;
             if(*completed || !window.allLoaded() || !window.windowHandle()->isExposed())return;
             *completed=true;poll->stop();
             const auto loadedMs=static_cast<qint64>(GetTickCount64()-launchTick);
+            measuringReady=true;pulseClock.restart();
             if(verifyLine>0)if(auto* page=window.currentPage();page&&page->ready){
                 page->editor->goToLine(verifyLine);
                 page->editor->send(SCI_SETFIRSTVISIBLELINE,page->editor->send(SCI_VISIBLEFROMDOCLINE,verifyLine-1));
@@ -95,8 +100,19 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
             if(!integrationCapture.isEmpty()) {
                 integrationDialog=new IntegrationDialog(ShellIntegration(QCoreApplication::applicationFilePath(),"Software\\sixunited\\ZexDiagnostics"),&window);integrationDialog->show();
             }
-            QTimer::singleShot(verifyWait,&window,[&,reportPath,capturePath,loadedMs]{
-                QJsonObject report{{"version","0.5.0.0"},{"qt",qVersion()},{"tabs",window.tabCount()},{"startup_to_ready_ms",loadedMs},{"plugin_paths",QJsonArray::fromStringList(QCoreApplication::libraryPaths())}};
+            auto* finish=new QTimer(&window);finish->setInterval(30);
+            const auto notBefore=GetTickCount64()+verifyWait;
+            QObject::connect(finish,&QTimer::timeout,&window,[&,reportPath,capturePath,loadedMs,finish,notBefore]{
+                if(GetTickCount64()<notBefore)return;
+                if(auto* page=window.currentPage();page && page->editor && page->editor->searchBusy())return;
+                finish->stop();
+                QJsonObject report{{"version","0.5.1.0"},{"qt",qVersion()},{"tabs",window.tabCount()},{"startup_to_ready_ms",loadedMs},{"plugin_paths",QJsonArray::fromStringList(QCoreApplication::libraryPaths())}};
+                const auto available=window.screen()->availableGeometry();
+                auto rectJson=[](const QRect& r){return QJsonArray{r.x(),r.y(),r.width(),r.height()};};
+                report.insert("startup_to_shell_ms",shellReadyMs);report.insert("max_ui_gap_ms",maxUiGap);report.insert("max_ready_ui_gap_ms",maxReadyUiGap);
+                report.insert("device_pixel_ratio",window.devicePixelRatioF());report.insert("screen_count",QGuiApplication::screens().size());
+                report.insert("available_geometry",rectJson(available));report.insert("window_geometry",rectJson(window.frameGeometry()));
+                report.insert("window_fits",available.contains(window.frameGeometry()));
                 int loadedTabs=0;for(auto* page:window.findChildren<FilePage*>())if(page->ready)++loadedTabs;
                 report.insert("loaded_tabs",loadedTabs);
                 report.insert("pid",qint64(GetCurrentProcessId()));report.insert("single_instance",receiverName!=nullptr);
@@ -106,13 +122,17 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
                 if(auto* page=window.currentPage()) {
                     report.insert("file",page->path);report.insert("ready",page->ready);report.insert("error",page->content.error);
                     report.insert("encoding",page->content.encoding);report.insert("language",page->editor->language());report.insert("search_matches",page->editor->matchCount());
+                    report.insert("search_complete",!page->editor->searchBusy());
                 } else report.insert("ready",true);
                 if(!capturePath.isEmpty())report.insert("screenshot_saved",window.grab().save(capturePath));
                 if(appearanceDialog)report.insert("appearance_saved",appearanceDialog->grab().save(appearanceCapture));
                 if(integrationDialog)report.insert("integration_saved",integrationDialog->grab().save(integrationCapture));
+                if(appearanceDialog)report.insert("appearance_fits",appearanceDialog->screen()->availableGeometry().contains(appearanceDialog->frameGeometry()));
+                if(integrationDialog)report.insert("integration_fits",integrationDialog->screen()->availableGeometry().contains(integrationDialog->frameGeometry()));
                 if(!reportPath.isEmpty()){QFile output(reportPath);if(output.open(QIODevice::WriteOnly))output.write(QJsonDocument(report).toJson());}
                 app.exit(report.value("ready").toBool()?0:1);
             });
+            finish->start();
         });
         poll->start();
         QTimer::singleShot(30000,&window,[&]{app.exit(2);});

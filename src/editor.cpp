@@ -84,6 +84,8 @@ CodeEditor::CodeEditor(QWidget* parent) : ScintillaEditBase(parent), colorTheme_
         updateBraces();
         emit positionChanged();
         if (static_cast<int>(updated) & (SC_UPDATE_SELECTION | SC_UPDATE_V_SCROLL | SC_UPDATE_H_SCROLL)) emit readingPositionChanged();
+        if(navigating_ && (static_cast<int>(updated)&SC_UPDATE_SELECTION)
+            && (send(SCI_GETCURRENTPOS)!=navigationCaret_ || send(SCI_GETANCHOR)!=navigationAnchor_))navigating_=false;
         if (!query_.isEmpty()) emit searchChanged();
     });
     connect(this, &ScintillaEditBase::marginClicked, this, [this](Scintilla::Position pos, Scintilla::KeyMod, int margin) {
@@ -91,7 +93,7 @@ CodeEditor::CodeEditor(QWidget* parent) : ScintillaEditBase(parent), colorTheme_
     });
     connect(this, &ScintillaEditBase::zoom, this, [this] { updateMargins(); });
     connect(&searchTimer_, &QTimer::timeout, this, &CodeEditor::countMatches);
-    searchTimer_.setInterval(0);
+    searchTimer_.setInterval(1);
 }
 
 void CodeEditor::setContent(const FileContent& content, const QString& path) {
@@ -147,6 +149,7 @@ ReadingPosition CodeEditor::readingPosition() const {
 }
 
 void CodeEditor::restoreReadingPosition(const ReadingPosition& position) {
+    navigating_=false;
     const auto last = qMax<sptr_t>(0,send(SCI_GETLINECOUNT)-1);
     const auto top = qBound<sptr_t>(0,position.topLine,last);
     const auto caret = send(SCI_FINDCOLUMN,qBound<sptr_t>(0,position.caretLine,last),qMax<qint64>(0,position.caretColumn));
@@ -307,7 +310,7 @@ void CodeEditor::applyColors() {
 }
 
 void CodeEditor::clearSearch() {
-    searchTimer_.stop(); query_.clear(); matches_.clear(); counting_=false; capped_=false;
+    searchTimer_.stop(); query_.clear(); matches_.clear(); counting_=false; capped_=false; navigating_=false;
     send(SCI_SETINDICATORCURRENT,searchIndicator);
     send(SCI_INDICATORCLEARRANGE,0,send(SCI_GETLENGTH));
     emit searchChanged();
@@ -319,61 +322,85 @@ void CodeEditor::setSearch(const QString& query, bool caseSensitive, bool wholeW
     query_=query.toUtf8();
     searchFlags_=(caseSensitive ? SCFIND_MATCHCASE : 0) | (wholeWord ? SCFIND_WHOLEWORD : 0);
     scanAt_=0; counting_=true;
-    // Keep the first match at/after the current selection when the query changes.
-    send(SCI_SETSEARCHFLAGS,searchFlags_);
-    send(SCI_SETTARGETRANGE,send(SCI_GETSELECTIONSTART),send(SCI_GETLENGTH));
-    auto pos=send(SCI_SEARCHINTARGET,query_.size(),reinterpret_cast<sptr_t>(query_.constData()));
-    if (pos<0) {
-        send(SCI_SETTARGETRANGE,0,send(SCI_GETLENGTH));
-        pos=send(SCI_SEARCHINTARGET,query_.size(),reinterpret_cast<sptr_t>(query_.constData()));
-    }
-    if (pos>=0) { send(SCI_SETSEL,pos,send(SCI_GETTARGETEND)); send(SCI_SCROLLCARET); }
+    beginNavigation(false,true);
     searchTimer_.start();
+}
+
+sptr_t CodeEditor::searchChunk(sptr_t& cursor,sptr_t limit,bool backwards,bool& done) {
+    // Overlap bounds UTF-8 case-fold expansion as well as matches spanning a chunk.
+    const sptr_t overlap=query_.size()*16+4;
+    const sptr_t step=qMax<sptr_t>(512*1024,overlap*2);
+    const auto boundary=backwards?qMax(limit,cursor-step):qMin(limit,cursor+step);
+    const auto end=backwards?boundary:qMin(limit,boundary+overlap);
+    send(SCI_SETSEARCHFLAGS,searchFlags_);
+    send(SCI_SETTARGETRANGE,cursor,end);
+    const auto pos=send(SCI_SEARCHINTARGET,query_.size(),reinterpret_cast<sptr_t>(query_.constData()));
+    done=end==limit;
+    if(pos<0 && !done) {
+        const auto next=backwards?boundary+overlap:boundary;
+        cursor=send(SCI_POSITIONAFTER,send(SCI_POSITIONBEFORE,next));
+    }
+    return pos;
 }
 
 void CodeEditor::countMatches() {
     QElapsedTimer timer; timer.start();
+    if(navigating_)advanceNavigation();
     const auto length=send(SCI_GETLENGTH);
-    send(SCI_SETSEARCHFLAGS,searchFlags_);
     send(SCI_SETINDICATORCURRENT,searchIndicator);
-    while (scanAt_<=length) {
-        send(SCI_SETTARGETRANGE,scanAt_,length);
-        auto pos=send(SCI_SEARCHINTARGET,query_.size(),reinterpret_cast<sptr_t>(query_.constData()));
-        if (pos<0) { counting_=false; break; }
-        const auto end=send(SCI_GETTARGETEND);
-        matches_.append({pos,end});
-        send(SCI_INDICATORFILLRANGE,pos,end-pos);
-        scanAt_=end>pos ? end : send(SCI_POSITIONAFTER,pos);
-        if (matches_.size()>=10000) { capped_=true; counting_=false; break; }
-        if (timer.elapsed()>=5) break;
+    while (counting_ && timer.elapsed()<8) {
+        bool done=false;
+        const auto pos=searchChunk(scanAt_,length,false,done);
+        if(pos<0) { if(done)counting_=false; }
+        else {
+            const auto end=send(SCI_GETTARGETEND);
+            matches_.append({pos,end});send(SCI_INDICATORFILLRANGE,pos,end-pos);
+            scanAt_=end>pos?end:send(SCI_POSITIONAFTER,pos);
+            if(matches_.size()>=10000){capped_=true;counting_=false;}
+            if(scanAt_>=length)counting_=false;
+        }
     }
-    if (!counting_ || scanAt_>length) { counting_=false; searchTimer_.stop(); }
+    if(!searchBusy())searchTimer_.stop();
     emit searchChanged();
 }
 
 bool CodeEditor::findNext(bool backwards) {
-    if (query_.isEmpty()) return false;
+    if(query_.isEmpty() || (!counting_ && matches_.isEmpty()))return false;
+    return beginNavigation(backwards,false);
+}
+
+bool CodeEditor::beginNavigation(bool backwards,bool includeSelection) {
+    navigationBackwards_=backwards;navigationWrapped_=false;navigationFound_=false;
+    navigationCaret_=send(SCI_GETCURRENTPOS);navigationAnchor_=send(SCI_GETANCHOR);
+    navigationOrigin_=send(backwards || includeSelection?SCI_GETSELECTIONSTART:SCI_GETSELECTIONEND);
+    navigationAt_=navigationOrigin_;navigationLimit_=backwards?0:send(SCI_GETLENGTH);navigating_=true;
+    advanceNavigation();
+    if(navigating_)searchTimer_.start();
+    return navigating_ || navigationFound_;
+}
+
+void CodeEditor::advanceNavigation() {
+    QElapsedTimer timer;timer.start();
     const auto length=send(SCI_GETLENGTH);
-    const auto start=send(backwards ? SCI_GETSELECTIONSTART : SCI_GETSELECTIONEND);
-    send(SCI_SETSEARCHFLAGS,searchFlags_);
-    send(SCI_SETTARGETRANGE,start,backwards ? 0 : length);
-    auto pos=send(SCI_SEARCHINTARGET,query_.size(),reinterpret_cast<sptr_t>(query_.constData()));
-    if (pos<0) {
-        send(SCI_SETTARGETRANGE,backwards ? length : 0,backwards ? start : length);
-        pos=send(SCI_SEARCHINTARGET,query_.size(),reinterpret_cast<sptr_t>(query_.constData()));
-    }
-    if (pos<0) return false;
-    const auto end=send(SCI_GETTARGETEND);
-    const auto line=send(SCI_LINEFROMPOSITION,pos);
-    send(SCI_ENSUREVISIBLEENFORCEPOLICY,line);
-    send(SCI_SETSEL,pos,end); send(SCI_SCROLLCARET);
-    emit searchChanged();
-    return true;
+    do {
+        bool done=false;
+        const auto pos=searchChunk(navigationAt_,navigationLimit_,navigationBackwards_,done);
+        if(pos>=0) {
+            const auto end=send(SCI_GETTARGETEND);navigating_=false;navigationFound_=true;
+            send(SCI_ENSUREVISIBLEENFORCEPOLICY,send(SCI_LINEFROMPOSITION,pos));
+            send(SCI_SETSEL,pos,end);send(SCI_SCROLLCARET);emit searchChanged();return;
+        }
+        if(done) {
+            if(navigationWrapped_ || navigationOrigin_==(navigationBackwards_?length:0)){navigating_=false;return;}
+            navigationWrapped_=true;navigationAt_=navigationBackwards_?length:0;
+            navigationLimit_=navigationBackwards_?navigationOrigin_:length;
+        }
+    } while(timer.elapsed()<4);
 }
 
 QString CodeEditor::matchSummary() const {
     if (query_.isEmpty()) return QStringLiteral("输入关键词");
-    if (matches_.isEmpty()) return counting_ ? QStringLiteral("搜索中…") : QStringLiteral("无结果");
+    if (matches_.isEmpty()) return searchBusy() ? QStringLiteral("搜索中…") : QStringLiteral("无结果");
     const auto position=send(SCI_GETSELECTIONSTART);
     auto found=std::lower_bound(matches_.cbegin(),matches_.cend(),position,[](const auto& m, sptr_t p){return m.first<p;});
     const int index=found!=matches_.cend() && found->first==position ? int(found-matches_.cbegin())+1 : 0;

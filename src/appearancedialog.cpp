@@ -2,6 +2,7 @@
 #include "editor.h"
 #include "fileicons.h"
 #include "theme.h"
+#include "windowplacement.h"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -10,6 +11,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QScrollArea>
 #include <QSpinBox>
 #include <QVBoxLayout>
 #include <windows.h>
@@ -20,8 +22,11 @@ AppearanceDialog::AppearanceDialog(const EditorAppearance& appearance, const QSt
     setObjectName("appearanceDialog");
     setWindowTitle(QStringLiteral("外观设置 · Zex"));
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
-    setMinimumWidth(610); resize(680,670);
-    auto* layout = new QVBoxLayout(this); layout->setContentsMargins(24,20,24,20); layout->setSpacing(14);
+    setMinimumSize(610,320); resize(680,670);
+    auto* outer=new QVBoxLayout(this);outer->setContentsMargins(24,20,24,20);outer->setSpacing(14);
+    auto* scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);outer->addWidget(scroll,1);
+    auto* content=new QWidget;scroll->setWidget(content);
+    auto* layout = new QVBoxLayout(content); layout->setContentsMargins(0,0,8,0); layout->setSpacing(14);
     auto* heading = new QLabel(QStringLiteral("编辑器外观"));
     heading->setObjectName("dialogHeading"); layout->addWidget(heading);
     auto* hint = new QLabel(QStringLiteral("在下方预览效果，应用后对所有文件生效。")); hint->setObjectName("muted"); layout->addWidget(hint);
@@ -63,7 +68,7 @@ AppearanceDialog::AppearanceDialog(const EditorAppearance& appearance, const QSt
     auto* apply = buttons->addButton(QStringLiteral("应用"), QDialogButtonBox::ApplyRole);
     auto* ok = buttons->addButton(QStringLiteral("确定"), QDialogButtonBox::AcceptRole); ok->setDefault(true);
     cancel->setObjectName("appearanceCancel"); apply->setObjectName("appearanceApply"); ok->setObjectName("appearanceOk");
-    layout->addWidget(buttons);
+    outer->addWidget(buttons);
     setValues(appearance,iconTheme,Theme::id());
     connect(themes_,&QComboBox::currentIndexChanged,this,&AppearanceDialog::updatePreview);
     connect(family_,&QFontComboBox::currentFontChanged,this,&AppearanceDialog::updatePreview);
@@ -78,6 +83,7 @@ AppearanceDialog::AppearanceDialog(const EditorAppearance& appearance, const QSt
     connect(buttons,&QDialogButtonBox::rejected,this,&QDialog::reject);
     const DWORD border = 0xFFFFFFFE;
     DwmSetWindowAttribute(reinterpret_cast<HWND>(winId()),34,&border,sizeof(border));
+    WindowPlacement::keepVisible(this);
 }
 
 EditorAppearance AppearanceDialog::editorAppearance() const {

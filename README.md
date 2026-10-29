@@ -8,9 +8,11 @@
 
 ![Zex 文件与代码阅读界面](docs/screenshot.png)
 
-A Windows file and code viewer, built with C++20, Qt 6 Widgets, Scintilla and Lexilla. Version 0.5.0.0. Company: sixunited. Author: sclliang.
+A Windows file and code viewer, built with C++20, Qt 6 Widgets, Scintilla and Lexilla. Version 0.5.1.0. Company: sixunited. Author: sclliang.
 
 This application is read-only. It opens local files directly, with draggable tabs, syntax highlighting, literal search (case and whole-word options), folding, line navigation and word wrap. There is no project or workspace model.
+
+Version 0.5.1 fits restored windows to an available screen after display or DPI changes, keeps maximized windows maximized, and makes settings scroll while their action buttons stay visible. Search counting and navigation scan bounded, overlapping UTF-8 chunks with short event-loop yields. Changing a query or closing a tab cancels pending work; previous/next navigation still searches beyond the 10,000 highlighted-match limit. See the [performance and display checks](docs/performance-0.5.1.md) for measurements and remaining limits.
 
 Version 0.5 adds a native single-instance launcher, per-user Windows integration, and per-file encoding selection. The launcher elects one owner per user/Windows session before loading Qt; subsequent launches forward bounded UTF-16 absolute paths using `WM_COPYDATA`. The receiver acknowledges a copied request and queues it on the UI thread. Batch requests preserve file order, focus existing tabs without duplicates, and load the final active file lazily. Empty launches activate the existing window. Concurrent starts and abandoned mutex ownership are handled without creating competing normal windows.
 
@@ -78,3 +80,5 @@ This diagnostic mode runs the real packaged application, reports when the file i
 `--verify-instance <unique-channel>` enables the real native launcher protocol on an isolated test channel; `scripts/verify-integration.ps1` tests batches, duplicate focus, activation, simultaneous launches, clean shutdown and crash recovery. `--verify-encoding utf-16le` tests a decoder override, including persistence between packaged processes. Registry tests operate under temporary HKCU test roots and preserve existing default/Open With entries. A test-only native probe verifies that `ShellExecuteEx` executes the registered command and passes an exact Unicode/spaced filename with `--`; it is not distributed. Integration-dialog screenshots use an isolated registration scope.
 
 Limits: 256 MB per file; highlighting switches off above 8 MB or for lines longer than 20,000 characters. Literal search highlights up to 10,000 matches; next/previous continues through the full document. UTF-8 and BOM-marked UTF-16/32 are recognized, with GB18030/GBK fallback. No general-purpose encoding detector, save, replace, project management, language server, terminal, or plugin system is included.
+
+Run `python scripts/verify-performance.py --label release-0.5.1 --enforce` after building for isolated packaged tests of 100–400% effective scaling, 10/100/240 MiB files, a 1 MiB single line, the size limit, and 100 restored tabs. This uses Python's standard library. Reports and screenshots go to the ignored `artifacts/performance/` directory. The scale override affects only the test process; Windows display settings and the normal user session are unchanged. Diagnostic reports include `startup_to_shell_ms`, `max_ui_gap_ms` (including construction/loading), and `max_ready_ui_gap_ms` (after the document became ready, including search). The 16 ms heartbeat measures observed UI event-loop gaps, not guaranteed frame times. Search reports wait for counting and navigation to finish.

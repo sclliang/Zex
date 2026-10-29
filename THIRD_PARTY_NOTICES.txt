@@ -1,4 +1,4 @@
-Zex 0.5.0.0
+Zex 0.5.1.0
 Copyright (c) 2026 sixunited. Author: sclliang
 
 Qt 6.8.3 (Qt Core, GUI, Widgets, Concurrent, Core5Compat, SVG and platform/image plugins)

@@ -3,6 +3,7 @@
 #include "appearancedialog.h"
 #include "fileicons.h"
 #include "integrationdialog.h"
+#include "windowplacement.h"
 #include <QtConcurrentRun>
 #include <QApplication>
 #include <QActionGroup>
@@ -24,6 +25,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QScreen>
+#include <QScrollArea>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QStackedWidget>
@@ -228,7 +230,7 @@ MainWindow::MainWindow(bool testMode, const QString& sessionFile) : settings_("s
     auto* status=new QWidget; status->setObjectName("statusbar"); status->setFixedHeight(28);
     auto* statusLayout=new QHBoxLayout(status); statusLayout->setContentsMargins(10,0,9,0); statusLayout->setSpacing(4);
     auto* lock=glyphLabel("lock","muted",14);statusLayout->addWidget(lock);
-    statusLayout->addWidget(label(QStringLiteral("只读"),"status")); fileInfo_=label("Zex 0.5.0","status"); statusLayout->addWidget(fileInfo_);
+    statusLayout->addWidget(label(QStringLiteral("只读"),"status")); fileInfo_=label("Zex 0.5.1","status"); statusLayout->addWidget(fileInfo_);
     encodingButton_=new QToolButton;encodingButton_->setObjectName("encodingButton");encodingButton_->setPopupMode(QToolButton::InstantPopup);encodingButton_->setMenu(encodingMenu_);encodingButton_->setAccessibleName(QStringLiteral("文件编码"));statusLayout->addWidget(encodingButton_);
     sessionNotice_=label(QStringLiteral("会话未保存"),"sessionNotice");sessionNotice_->hide();statusLayout->addWidget(sessionNotice_);
     statusLayout->addStretch(); position_=label({},"status"); language_=label({},"status"); statusLayout->addWidget(position_); statusLayout->addWidget(language_);
@@ -260,12 +262,13 @@ MainWindow::MainWindow(bool testMode, const QString& sessionFile) : settings_("s
     });
     if(!testMode && settings_.contains("geometry")) {
         restoreGeometry(settings_.value("geometry").toByteArray());
-        bool visible=false; for(auto* screen:QGuiApplication::screens()) if(screen->availableGeometry().intersects(frameGeometry()))visible=true;
-        if(!visible) move(QGuiApplication::primaryScreen()->availableGeometry().center()-rect().center());
     } else if(auto* screen=QGuiApplication::primaryScreen()) move(screen->availableGeometry().center()-rect().center());
+    QList<QRect> areas;for(auto* screen:QGuiApplication::screens())areas.append(screen->availableGeometry());
+    setGeometry(WindowPlacement::fit(geometry(),areas));
     if(!testMode && settings_.value("maximized",false).toBool()) setWindowState(Qt::WindowMaximized);
     refreshThemeIcons();applyNativeChrome();
     refreshStatus();
+    WindowPlacement::keepVisible(this);
 }
 
 void MainWindow::buildTitleBar(QVBoxLayout* root) {
@@ -312,7 +315,7 @@ void MainWindow::buildMenus(QToolButton* file, QToolButton* view, QToolButton* h
     views->addAction(QStringLiteral("Windows 集成…"),this,[this]{IntegrationDialog dialog(ShellIntegration(QCoreApplication::applicationFilePath()),this);dialog.exec();});
     auto* helps=new QMenu(this);help->setMenu(helps);
     helps->addAction(QStringLiteral("快捷键"),this,[this]{QMessageBox::information(this,QStringLiteral("Zex · 快捷键"),QStringLiteral("Ctrl+O    打开一个或多个文件\nCtrl+F    搜索当前文件\nEnter / Shift+Enter    下一个 / 上一个结果\nF3 / Shift+F3    下一个 / 上一个结果\nEsc    关闭搜索\nCtrl+G    跳转到行\nCtrl+W / 鼠标中键    关闭标签\nCtrl+Shift+T    恢复标签\nCtrl+Tab / Ctrl+Shift+Tab    切换标签\nAlt+1 … Alt+9    切换到指定标签\nAlt+Z    自动换行\nCtrl++ / Ctrl+- / Ctrl+0    调整字号\nCtrl+,    外观设置\nF5    重新载入文件\n\n支持拖入文件和拖动标签排序。"));});
-    helps->addAction(QStringLiteral("关于 Zex"),this,[this]{QMessageBox::about(this,QStringLiteral("关于 Zex"),QStringLiteral("<h2>Zex <small>0.5.0</small></h2><p>专注于文件与代码的桌面阅读器。</p><p>C++ · Qt 6 · Scintilla · Lexilla</p><p>Copyright (c) 2026 sixunited.<br>Author: sclliang</p><p>本版本支持只读查看，不会修改打开的文件。<br>开源组件许可位于 bin/licenses。</p>"));});
+    helps->addAction(QStringLiteral("关于 Zex"),this,[this]{QMessageBox::about(this,QStringLiteral("关于 Zex"),QStringLiteral("<h2>Zex <small>0.5.1</small></h2><p>专注于文件与代码的桌面阅读器。</p><p>C++ · Qt 6 · Scintilla · Lexilla</p><p>Copyright (c) 2026 sixunited.<br>Author: sclliang</p><p>本版本支持只读查看，不会修改打开的文件。<br>开源组件许可位于 bin/licenses。</p>"));});
 }
 
 QWidget* MainWindow::buildWelcome() {
@@ -332,7 +335,8 @@ QWidget* MainWindow::buildWelcome() {
         }
     }
     outer->addWidget(panel,0,Qt::AlignHCenter);outer->addStretch(4);
-    auto* bottom=label(QStringLiteral("本地文件  /  即开即读"),"subtitle");bottom->setAlignment(Qt::AlignCenter);outer->addWidget(bottom);outer->addSpacing(12);return page;
+    auto* bottom=label(QStringLiteral("本地文件  /  即开即读"),"subtitle");bottom->setAlignment(Qt::AlignCenter);outer->addWidget(bottom);outer->addSpacing(12);
+    auto* scroll=new QScrollArea;scroll->setFrameShape(QFrame::NoFrame);scroll->setWidgetResizable(true);scroll->setWidget(page);return scroll;
 }
 
 FilePage* MainWindow::pageAt(int index) const {
@@ -472,7 +476,7 @@ void MainWindow::refreshStatus() {
     } else {
         encodingButton_->hide();
         fileIcon_->setPixmap(Theme::icon("file",Theme::colors().subtle).pixmap(QSize(18,18),devicePixelRatioF()));
-        title_->setText("Zex");setWindowTitle("Zex");pathLabel_->setText(QStringLiteral("文件阅读器"));pathLabel_->setToolTip({});reloadButton_->hide();fileInfo_->setText("Zex 0.5.0");position_->clear();language_->clear();
+        title_->setText("Zex");setWindowTitle("Zex");pathLabel_->setText(QStringLiteral("文件阅读器"));pathLabel_->setToolTip({});reloadButton_->hide();fileInfo_->setText("Zex 0.5.1");position_->clear();language_->clear();
     }
 }
 

@@ -5,6 +5,7 @@
 #include "fileicons.h"
 #include "filereceiver.h"
 #include "integrationdialog.h"
+#include "windowplacement.h"
 #include "SciLexer.h"
 #include <QApplication>
 #include <QFile>
@@ -18,6 +19,7 @@
 #include <QJsonObject>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QScreen>
 #include <QTemporaryDir>
 #include <QTextCodec>
 #include <QtTest>
@@ -36,6 +38,33 @@ struct RegistrySandbox {
 class ZexTests : public QObject {
     Q_OBJECT
 private slots:
+    void windowPlacementAcrossDisplays() {
+        const QRect primary(0,0,1920,1040),left(-1280,-180,1280,960),scaled(1920,0,960,516);
+        const QList<QRect> areas{primary,left,scaled};
+        QCOMPARE(WindowPlacement::fit(QRect(-1200,-100,1000,700),areas),QRect(-1200,-100,1000,700));
+        QCOMPARE(WindowPlacement::fit(QRect(2000,60,1180,780),areas),scaled);
+        QCOMPARE(WindowPlacement::fit(QRect(-1000,-100,1180,780),{primary}),QRect(0,0,1180,780));
+        QCOMPARE(WindowPlacement::fit(QRect(1800,-600,1000,780),{primary}),QRect(920,0,1000,780));
+        const QRect compactScreen(0,40,960,476);
+        QCOMPARE(WindowPlacement::fit(QRect(0,0,1180,780),{compactScreen}),compactScreen);
+        QCOMPARE(WindowPlacement::fit(QRect(60,80,800,600),{primary}),QRect(60,80,800,600));
+        // Gaps between screens are not usable desktop space.
+        const auto fitted=WindowPlacement::fit(QRect(1800,1200,1100,700),{primary,QRect(2500,0,1200,900)});
+        QVERIFY(primary.contains(fitted) || QRect(2500,0,1200,900).contains(fitted));
+    }
+    void windowsRemainReachableAfterDisplayChanges() {
+        MainWindow window(true);window.show();QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto fits=[](QWidget& widget){return widget.screen()->availableGeometry().contains(widget.frameGeometry());};
+        auto change=[](QWidget& widget){QEvent event(QEvent::DevicePixelRatioChange);QCoreApplication::sendEvent(&widget,&event);};
+        const auto area=window.screen()->availableGeometry();
+        window.move(area.topLeft()-QPoint(900,600));change(window);QTRY_VERIFY(fits(window));
+        window.showMaximized();QTRY_VERIFY(window.isMaximized());change(window);QTest::qWait(180);QVERIFY(window.isMaximized());
+        window.showNormal();QTRY_VERIFY(!window.isMaximized() && fits(window));
+        AppearanceDialog appearance(EditorAppearance::defaults(),"material",&window);appearance.show();
+        appearance.move(area.topRight()+QPoint(200,0));change(appearance);QTRY_VERIFY(fits(appearance));appearance.close();
+        RegistrySandbox registry;IntegrationDialog integration(ShellIntegration("C:/Zex/Zex.exe",registry.prefix),&window);integration.show();
+        integration.move(area.topRight()+QPoint(200,0));change(integration);QTRY_VERIFY(fits(integration));integration.close();window.close();
+    }
     void shellExecutesRegisteredCommand() {
         RegistrySandbox registry;QTemporaryDir directory;
         const auto probe=directory.filePath("中文 program space.exe");
@@ -192,6 +221,47 @@ private slots:
         editor.setSearch("alpha",false,false);QTRY_COMPARE(editor.matchCount(),4);
         editor.setSearch("no-such-word",true,false);QTRY_COMPARE(editor.matchSummary(),QStringLiteral("无结果"));QVERIFY(!editor.findNext());
         editor.clearSearch();QCOMPARE(editor.matchCount(),0);
+    }
+    void chunkedSearchBoundariesAndNavigation() {
+        CodeEditor editor;const sptr_t chunk=512*1024;
+        QByteArray bytes=QByteArray(63,'x').append('\n').repeated(6*chunk/64);
+        const auto needle=QStringLiteral("中文AbC").toUtf8();
+        const QList<sptr_t> positions{chunk-2,2*chunk+7,5*chunk-3};
+        for(auto at:positions)bytes.replace(at-1,needle.size()+2," "+needle+" ");
+        editor.setContent(decodeFile(bytes),"boundaries.txt");
+        editor.setSearch(QStringLiteral("中文abc"),false,true);
+        QTRY_VERIFY_WITH_TIMEOUT(!editor.searchBusy(),5000);QCOMPARE(editor.matchCount(),3);
+        QCOMPARE(editor.send(SCI_GETSELECTIONSTART),positions[0]);
+        QVERIFY(editor.findNext());QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.send(SCI_GETSELECTIONSTART),positions[1]);
+        QVERIFY(editor.findNext());QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.send(SCI_GETSELECTIONSTART),positions[2]);
+        QVERIFY(editor.findNext());QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.send(SCI_GETSELECTIONSTART),positions[0]);
+        QVERIFY(editor.findNext(true));QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.send(SCI_GETSELECTIONSTART),positions[2]);
+        QVERIFY(editor.findNext(true));QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.send(SCI_GETSELECTIONSTART),positions[1]);
+        QVERIFY(editor.findNext(true));QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.send(SCI_GETSELECTIONSTART),positions[0]);
+        // Whole-word rejection at a boundary, then a case-folded match crossing it.
+        bytes.replace(positions[1]-1,1,"x");editor.setContent(decodeFile(bytes),"boundaries.txt");
+        editor.setSearch(QStringLiteral("中文abc"),false,true);QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.matchCount(),2);
+        bytes=QByteArray(63,'x').append('\n').repeated(chunk/64+2);
+        bytes.replace(chunk-2,7,QStringLiteral(" Straße ").toUtf8());
+        editor.setContent(decodeFile(bytes),"casefold.txt");editor.setSearch("STRASSE",false,true);
+        QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.matchCount(),1);QCOMPARE(editor.selectedText(),QStringLiteral("Straße"));
+    }
+    void searchCancellationAndCappedNavigation() {
+        CodeEditor editor;auto bytes=QByteArray("alpha\n").repeated(10050);
+        editor.setContent(decodeFile(bytes),"capped.txt");editor.setSearch("alpha",true,true);
+        QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.matchCount(),10000);
+        editor.send(SCI_SETSEL,10020*6,10020*6+5);
+        QVERIFY(editor.findNext());QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.send(SCI_GETSELECTIONSTART),sptr_t(10021*6));
+        QVERIFY(editor.findNext(true));QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.send(SCI_GETSELECTIONSTART),sptr_t(10020*6));
+        bytes=QByteArray("alpha xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n").repeated(200000);
+        editor.setContent(decodeFile(bytes),"cancel.txt");
+        bool heartbeat=false;QTimer::singleShot(0,&editor,[&]{heartbeat=true;});
+        editor.setSearch("no such word",false,false);QVERIFY(editor.searchBusy());QTRY_VERIFY(heartbeat);
+        editor.setSearch("alpha",true,true);QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.matchCount(),10000);
+        editor.setSearch("no such word",false,false);editor.clearSearch();QTest::qWait(30);
+        QVERIFY(!editor.searchBusy());QCOMPARE(editor.matchCount(),0);
+        editor.setSearch("missing again",false,false);editor.setContent(decodeFile("replacement\n"),"replacement.txt");
+        QTest::qWait(30);QVERIFY(!editor.searchBusy());QCOMPARE(editor.matchCount(),0);
     }
     void tabsAndBackgroundLoading() {
         QTemporaryDir dir;QVERIFY(dir.isValid());
