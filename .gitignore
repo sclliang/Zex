@@ -1,0 +1,13 @@
+/build/
+/.tools/
+/.downloads/
+/package/
+/dist/
+/artifacts/
+*.user
+/.vs/
+/aqtinstall.log
+/(Join-Path
+/CMakeUserPresets.json
+__pycache__/
+*.pyc

@@ -1,0 +1,8 @@
+Material Icon Theme 5.40.0
+https://registry.npmjs.org/material-icon-theme/-/material-icon-theme-5.40.0.tgz
+https://github.com/material-extensions/vscode-material-icon-theme
+
+Seti file associations and icon font from VS Code commit fcdfa8f173bf4371353cd3e154fa08d3ccf09596
+https://raw.githubusercontent.com/microsoft/vscode/fcdfa8f173bf4371353cd3e154fa08d3ccf09596/extensions/theme-seti/icons/
+Original font and glyphs: https://github.com/jesseweed/seti-ui (license commit 2d6c5e68b4ded73c92dac291845ee44e1182d511)
+Zex converts WOFF to TTF without changing glyphs; Seti Mono changes only the display color.

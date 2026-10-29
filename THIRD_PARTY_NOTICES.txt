@@ -1,0 +1,39 @@
+Zex 0.5.0.0
+Copyright (c) 2026 sixunited. Author: sclliang
+
+Qt 6.8.3 (Qt Core, GUI, Widgets, Concurrent, Core5Compat, SVG and platform/image plugins)
+Copyright The Qt Company Ltd. and other contributors.
+Qt is distributed as unmodified dynamic libraries under the GNU Lesser General Public License v3, with applicable exceptions and third-party notices. See Qt license files in this directory.
+Official corresponding source distribution:
+https://download.qt.io/archive/qt/6.8/6.8.3/single/qt-everywhere-src-6.8.3.tar.xz
+https://code.qt.io/cgit/qt/qtbase.git/tree/?h=v6.8.3
+https://code.qt.io/cgit/qt/qt5compat.git/tree/?h=v6.8.3
+https://code.qt.io/cgit/qt/qtsvg.git/tree/?h=v6.8.3
+Qt source and build instructions: https://doc.qt.io/qt-6.8/build-sources.html
+The application supports replacing the Qt shared libraries with ABI-compatible modified versions. Reverse engineering for debugging modifications to these libraries is permitted under their license.
+
+Scintilla 5.6.7
+Copyright 1998-2026 by Neil Hodgson and contributors.
+License: Scintilla.txt
+Source: https://www.scintilla.org/scintilla567.zip
+
+Lexilla 5.5.4
+Copyright 1998-2026 by Neil Hodgson and contributors.
+License: Lexilla.txt
+Source: https://www.scintilla.org/lexilla554.zip
+
+Material Icon Theme 5.40.0
+Copyright Philipp Kief and contributors. MIT license.
+Source: https://github.com/material-extensions/vscode-material-icon-theme
+License: FileIcons/Material-Icon-Theme.txt
+
+Seti UI icons and VS Code Seti theme
+Copyright Jesse Weed and Microsoft Corporation; respective MIT licenses.
+Sources: https://github.com/jesseweed/seti-ui and https://github.com/microsoft/vscode/tree/main/extensions/theme-seti
+Licenses and pinned source identifiers: FileIcons/Seti-UI.txt, FileIcons/VSCode-Seti.txt, FileIcons/SOURCES.txt
+The Seti icon font is converted from WOFF to TTF without changing glyphs; the monochrome preset changes display color. Standard language/extension associations are resolved by Zex.
+
+Microsoft Visual C++ Redistributable DLLs
+Copyright Microsoft Corporation. Distributed as app-local runtime components under the Visual Studio redistribution terms.
+
+The Zex name, icon and application interface were created for this project. Zex is not affiliated with Zed Industries.

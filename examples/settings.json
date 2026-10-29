@@ -1,0 +1,12 @@
+{
+  "name": "Zex",
+  "version": "0.1.0",
+  "description": "专注于文件与代码",
+  "features": ["files", "tabs", "highlighting", "search"],
+  "appearance": {
+    "theme": "dark",
+    "fontSize": 12,
+    "wordWrap": false
+  },
+  "readOnly": true
+}
