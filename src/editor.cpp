@@ -28,6 +28,7 @@ CodeEditor::CodeEditor(QWidget* parent) : ScintillaEditBase(parent), colorTheme_
     send(SCI_STYLESETBACK, STYLE_DEFAULT, rgb(Theme::colors().background));
     sends(SCI_STYLESETFONT, STYLE_DEFAULT, appearance_.family.toUtf8().constData());
     send(SCI_STYLESETSIZE, STYLE_DEFAULT, appearance_.points);
+    send(SCI_STYLESETCHECKMONOSPACED, STYLE_DEFAULT, 1);
     send(SCI_STYLECLEARALL);
     send(SCI_SETFONTQUALITY, SC_EFF_QUALITY_LCD_OPTIMIZED);
     send(SCI_SETEXTRAASCENT, 3);
@@ -107,6 +108,14 @@ void CodeEditor::setContent(const FileContent& content, const QString& path) {
     configureLanguage(path, content.large);
     send(SCI_GOTOPOS, 0);
     updateMargins();
+}
+
+void CodeEditor::setPreparedContent(const PreparedFile& file,const QString& path) {
+    clearSearch();
+    send(SCI_SETDOCPOINTER,0,reinterpret_cast<sptr_t>(file.document.get()));
+    documentOwner_=file.document;
+    send(SCI_SETCODEPAGE,SC_CP_UTF8);send(SCI_SETUNDOCOLLECTION,0);send(SCI_SETREADONLY,1);
+    configureLanguage(path,file.content.large);send(SCI_GOTOPOS,0);updateMargins();
 }
 
 void CodeEditor::setPointSize(int points) {

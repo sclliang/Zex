@@ -20,6 +20,9 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QScreen>
+#include <QProgressBar>
+#include <QToolButton>
+#include <QtConcurrentRun>
 #include <QTemporaryDir>
 #include <QTextCodec>
 #include <QtTest>
@@ -38,6 +41,65 @@ struct RegistrySandbox {
 class ZexTests : public QObject {
     Q_OBJECT
 private slots:
+    void monospacedMeasurementPreservesCharacterPositions() {
+        const auto text=QStringLiteral("ASCII fi => != 0123456789\t中文🙂 e\u0301\n").repeated(20).toUtf8();
+        for(const auto& family:QStringList{"Cascadia Code","Consolas","Arial"}) {
+            CodeEditor fast,reference;auto appearance=EditorAppearance::defaults();appearance.family=family;
+            fast.setAppearance(appearance);reference.setAppearance(appearance);
+            fast.setContent(decodeFile(text),"widths.txt");reference.setContent(decodeFile(text),"widths.txt");
+            for(int style=0;style<256;++style)reference.send(SCI_STYLESETCHECKMONOSPACED,style,0);
+            for(sptr_t pos=0;pos<text.size();pos=fast.send(SCI_POSITIONAFTER,pos)) {
+                QVERIFY(qAbs(fast.send(SCI_POINTXFROMPOSITION,0,pos)-reference.send(SCI_POINTXFROMPOSITION,0,pos))<=1);
+                QCOMPARE(fast.send(SCI_POINTYFROMPOSITION,0,pos),reference.send(SCI_POINTYFROMPOSITION,0,pos));
+            }
+            QCOMPARE(fast.send(SCI_GETREADONLY),sptr_t(1));
+        }
+    }
+    void preparedDocumentsPreserveUtf8AndCancellation() {
+        QTemporaryDir dir;const auto path=dir.filePath("prepared.txt");
+        QByteArray bytes(2*1024*1024-2,'x');bytes+=QStringLiteral("中文🙂\r\nlast marker\n").toUtf8();
+        QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));QCOMPARE(file.write(bytes),qint64(bytes.size()));file.close();
+        auto control=std::make_shared<LoadControl>();
+        auto future=QtConcurrent::run([path,control] {return prepareFile(path,"auto",control);});
+        QTRY_VERIFY(future.isFinished());auto result=future.result();QVERIFY(result.content.error.isEmpty());QVERIFY(result.document);QVERIFY(result.content.utf8.isEmpty());
+        QCOMPARE(control->percent.load(),100);CodeEditor editor;editor.setPreparedContent(result,path);
+        QCOMPARE(editor.send(SCI_GETLENGTH),sptr_t(bytes.size()));
+        QCOMPARE(QByteArray(reinterpret_cast<const char*>(editor.send(SCI_GETCHARACTERPOINTER)),bytes.size()),bytes);
+        editor.setSearch(QStringLiteral("中文🙂"),true,false);QTRY_COMPARE(editor.matchCount(),1);QCOMPARE(editor.selectedText(),QStringLiteral("中文🙂"));
+        QCOMPARE(editor.send(SCI_GETREADONLY),sptr_t(1));QCOMPARE(editor.send(SCI_GETUNDOCOLLECTION),sptr_t(0));
+        control=std::make_shared<LoadControl>();control->canceled.store(true);
+        const auto canceled=prepareFile(path,"auto",control);QVERIFY(canceled.content.canceled);QVERIFY(!canceled.document);
+        QVERIFY(readFile("unreachable-file.txt","auto",control).canceled);
+    }
+    void canceledReloadKeepsVisibleDocumentAndReadingPosition() {
+        QTemporaryDir dir;const auto path=dir.filePath("reload.cpp");
+        QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));const auto bytes=QByteArray("int sample() {\n    return 42;\n}\n").repeated(300);file.write(bytes);file.close();
+        MainWindow window(true);window.show();auto* page=window.openPath(path);QTRY_VERIFY(page->ready && !page->loading);
+        auto* editor=page->editor;editor->setSearch("sample",true,true);QTRY_VERIFY(!editor->searchBusy());
+        editor->send(SCI_FOLDLINE,0,SC_FOLDACTION_CONTRACT);editor->restoreReadingPosition({120,0,0,125,4,125,1});
+        const auto position=page->readingPosition();const auto document=editor->send(SCI_GETDOCPOINTER);
+        for(int i=0;i<4;++i){page->reload();QVERIFY(page->loading && page->ready);page->cancelLoad();QVERIFY(!page->loading && page->ready && page->wasCanceled());}
+        page->setEncoding("gbk");QVERIFY(page->loading);page->cancelLoad();QCOMPARE(page->encoding(),QString("auto"));
+        QTest::qWait(100);QCOMPARE(editor->send(SCI_GETDOCPOINTER),document);QCOMPARE(editor->send(SCI_GETFOLDEXPANDED,0),sptr_t(0));
+        QCOMPARE(editor->matchCount(),300);QVERIFY(page->readingPosition()==position);
+        page->reload();QTRY_VERIFY(!page->loading);QVERIFY(page->ready && !page->wasCanceled());QVERIFY(page->readingPosition()==position);
+        QVERIFY(file.open(QIODevice::ReadOnly));QCOMPARE(file.readAll(),bytes);window.close();
+    }
+    void loadingProgressCancelRetryAndClose() {
+        QTemporaryDir dir;const auto path=dir.filePath("large.log"),sessionPath=dir.filePath("session.json");
+        QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));const auto block=QByteArray(1023,'x').append('\n').repeated(1024);
+        for(int i=0;i<128;++i)QCOMPARE(file.write(block),qint64(block.size()));file.close();
+        SessionStore store(sessionPath);QVERIFY(store.write({{{path,{120,0,0,125,4,125,1}}},path}));
+        MainWindow window(true,sessionPath);window.show();window.restoreLastSession();auto* page=window.currentPage();QVERIFY(page);
+        auto* progress=page->findChild<QProgressBar*>("loadProgress");auto* cancel=page->findChild<QToolButton*>("cancelLoad");QVERIFY(progress && cancel);
+        QTRY_VERIFY_WITH_TIMEOUT(progress->isVisible() && progress->value()>0 && page->loading,5000);
+        QTest::mouseClick(cancel,Qt::LeftButton);QVERIFY(!page->loading && !page->ready && page->wasCanceled());
+        QVERIFY(window.saveSession());QCOMPARE(store.read().tabs[0].position.topLine,qint64(120));
+        auto* retry=page->findChild<QPushButton*>("retryLoad");QVERIFY(retry->isVisible());QTest::mouseClick(retry,Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!page->loading,15000);QVERIFY2(page->ready,qPrintable(page->content.error));QVERIFY(!page->wasCanceled());
+        QCOMPARE(page->readingPosition().topLine,qint64(120));QCOMPARE(page->editor->send(SCI_GETLENGTH),sptr_t(128*1024*1024));
+        page->reload();window.closeTab(0);QCOMPARE(window.tabCount(),0);QTest::qWait(100);window.close();
+    }
     void windowPlacementAcrossDisplays() {
         const QRect primary(0,0,1920,1040),left(-1280,-180,1280,960),scaled(1920,0,960,516);
         const QList<QRect> areas{primary,left,scaled};

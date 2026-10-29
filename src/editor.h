@@ -1,6 +1,7 @@
 #pragma once
 #include "ScintillaEditBase.h"
 #include "fileloader.h"
+#include "documentloader.h"
 #include "appearance.h"
 #include "session.h"
 #include <QSet>
@@ -12,6 +13,7 @@ class CodeEditor : public ScintillaEditBase {
 public:
     explicit CodeEditor(QWidget* parent = nullptr);
     void setContent(const FileContent& content, const QString& path);
+    void setPreparedContent(const PreparedFile& file,const QString& path);
     QString language() const { return language_; }
     void setWordWrap(bool on);
     void setPointSize(int points);
@@ -53,6 +55,7 @@ private:
     QString colorTheme_;
     QByteArray lexer_ = "null";
     EditorAppearance appearance_ = EditorAppearance::defaults();
+    DocumentPtr documentOwner_;
     QSet<int> commentStyles_;
     QTimer searchTimer_;
     QByteArray query_;

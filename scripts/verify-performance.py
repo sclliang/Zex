@@ -29,7 +29,7 @@ def run(name,files=(),extra=(),scale=None,expect_ready=True):
     assert data['ready']==expect_ready,name
     data['case']=name;data['process_wall_ms']=round((time.perf_counter()-started)*1000)
     results.append(data)
-    print(json.dumps({k:data.get(k) for k in ['case','startup_to_shell_ms','startup_to_ready_ms','max_ui_gap_ms','max_ready_ui_gap_ms','tabs','loaded_tabs','device_pixel_ratio','window_fits','appearance_fits','integration_fits','search_matches']},ensure_ascii=False),flush=True)
+    print(json.dumps({k:data.get(k) for k in ['case','startup_to_shell_ms','startup_to_ready_ms','max_ui_gap_ms','max_loading_ui_gap_ms','max_ready_ui_gap_ms','tabs','loaded_tabs','device_pixel_ratio','window_fits','appearance_fits','integration_fits','search_matches','load_canceled','cancel_ms']},ensure_ascii=False),flush=True)
     return data
 
 base=run('screen-baseline')
@@ -49,12 +49,24 @@ for size in (10,100,240):
             while remaining:chunk=block[:min(remaining,len(block))];stream.write(chunk);remaining-=len(chunk)
     data=run('large-'+str(size),files=[path],extra=['--find','MISSING_NEEDLE_IN_THIS_DOCUMENT'])
     assert data['search_matches']==0 and '大文件模式' in data['language']
-    if args.enforce:assert data['search_complete'] and data['max_ready_ui_gap_ms']<150
+    if args.enforce:assert data['search_complete'] and data['max_ready_ui_gap_ms']<150 and data['max_loading_ui_gap_ms']<150
 
 longline=fixtures/'long-line.log'
 longline.write_bytes(b'x'*(1024*1024)+b' last_line_marker\n')
 data=run('long-line',files=[longline],extra=['--find','last_line_marker'])
 assert data['search_matches']==1
+if args.enforce:assert data['max_loading_ui_gap_ms']<150
+
+unicode_line=fixtures/'long-unicode.log'
+unicode_line.write_text('中文🙂 '*65536+' last_line_marker\n',encoding='utf-8')
+data=run('long-unicode',files=[unicode_line],extra=['--find','last_line_marker'])
+assert data['search_matches']==1
+
+large_file=fixtures/'large-240MiB.log'
+for percent in (25,75):
+    data=run('cancel-'+str(percent),files=[large_file],extra=['--verify-cancel-percent',str(percent),'--capture-loading',str(folder/f'loading-{percent}.png'),'--capture',str(folder/f'canceled-{percent}.png')],expect_ready=False)
+    assert data['load_canceled'] and data['cancel_requested'] and data['canceled_at_percent']>=percent
+    assert data['cancel_ms']<150 and data['loading_screenshot_saved']
 too_large=fixtures/'over-limit.log'
 with too_large.open('wb') as stream:stream.truncate(257*1024*1024)
 data=run('over-limit',files=[too_large],expect_ready=False)

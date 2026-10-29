@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(Zex VERSION 0.5.1.0 LANGUAGES CXX RC)
+project(Zex VERSION 0.5.2.0 LANGUAGES CXX RC)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -25,7 +25,7 @@ set_target_properties(lexilla PROPERTIES AUTOMOC OFF)
 target_include_directories(lexilla PUBLIC vendor/lexilla/include PRIVATE vendor/lexilla/lexlib vendor/scintilla/include)
 target_compile_definitions(lexilla PRIVATE LEXILLA_NO_EXPORT)
 
-add_library(zex_core STATIC src/fileloader.cpp src/editor.cpp src/theme.cpp src/mainwindow.cpp
+add_library(zex_core STATIC src/fileloader.cpp src/documentloader.cpp src/editor.cpp src/theme.cpp src/mainwindow.cpp
   src/fileicons.cpp src/appearance.cpp src/appearancedialog.cpp src/session.cpp src/filereceiver.cpp src/shellintegration.cpp src/integrationdialog.cpp src/windowplacement.cpp assets/file_icons.qrc assets/ui_resources.qrc)
 target_include_directories(zex_core PUBLIC src)
 target_link_libraries(zex_core PUBLIC scintilla lexilla Qt6::Concurrent Qt6::Svg dwmapi advapi32 shell32)

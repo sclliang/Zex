@@ -164,6 +164,9 @@ QString styleSheet(const Theme::Colors& c) {
       QPushButton:default { border-color: @accent; }
       QPushButton#openPrimary { background: @accent; border: 1px solid @accent; color: @accentText; font-weight: 600; }
       QPushButton#openPrimary:hover { background: @accentHover; }
+      QWidget#loadBar { background: @elevated; border-bottom: 1px solid @border; }
+      QProgressBar { background: @border; border: none; border-radius: 2px; }
+      QProgressBar::chunk { background: @accent; border-radius: 2px; }
       QMenu { background: @elevated; color: @text; border: 1px solid @border; border-radius: 6px; padding: 5px; }
       QMenu::item { padding: 7px 32px 7px 12px; border-radius: 3px; }
       QMenu::item:selected { background: @selection; }

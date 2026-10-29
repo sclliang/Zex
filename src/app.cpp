@@ -13,6 +13,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLineEdit>
+#include <QToolButton>
 #include <QThreadPool>
 #include <QSettings>
 #include <QPointer>
@@ -33,11 +34,12 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
     QCoreApplication::setLibraryPaths({plugins});
     qputenv("QT_PLUGIN_PATH",plugins.toUtf8());
     QApplication app(argc,argv);
-    app.setApplicationName("Zex");app.setOrganizationName("sixunited");app.setApplicationVersion("0.5.1.0");
+    app.setApplicationName("Zex");app.setOrganizationName("sixunited");app.setApplicationVersion("0.5.2.0");
     QThreadPool::globalInstance()->setMaxThreadCount(qMax(2,qMin(4,QThread::idealThreadCount())));
     QString reportPath,capturePath,searchText,sessionFile,verifyTheme,appearanceCapture;
     QPointer<AppearanceDialog> appearanceDialog;
-    int verifyLine=0,verifyWait=500;
+    int verifyLine=0,verifyWait=500,verifyCancelPercent=-1;
+    QString loadingCapture;
     QString verifyReady,verifyEncoding,integrationCapture;
     QPointer<IntegrationDialog> integrationDialog;
     QStringList files;
@@ -57,12 +59,15 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
         else if(args[i]=="--verify-line"&&i+1<args.size())verifyLine=qMax(0,args[++i].toInt());
         else if(args[i]=="--verify-theme"&&i+1<args.size()){verifyTheme=args[++i];testMode=true;}
         else if(args[i]=="--capture-appearance"&&i+1<args.size()){appearanceCapture=args[++i];testMode=true;}
+        else if(args[i]=="--verify-cancel-percent"&&i+1<args.size()){verifyCancelPercent=qBound(0,args[++i].toInt(),99);testMode=true;}
+        else if(args[i]=="--capture-loading"&&i+1<args.size()){loadingCapture=args[++i];testMode=true;}
         else files.append(args[i]);
     }
     QSettings preferences("sixunited","Zex");
     Theme::apply(app,!verifyTheme.isEmpty()?verifyTheme:testMode?"graphite":Theme::storedTheme(preferences));
-    QTimer uiPulse;QElapsedTimer pulseClock;int maxUiGap=0,maxReadyUiGap=0;qint64 shellReadyMs=0;bool measuringReady=false;
-    if(testMode){pulseClock.start();uiPulse.setInterval(16);QObject::connect(&uiPulse,&QTimer::timeout,&app,[&]{const auto gap=int(pulseClock.restart());maxUiGap=qMax(maxUiGap,gap);if(measuringReady)maxReadyUiGap=qMax(maxReadyUiGap,gap);});uiPulse.start();}
+    QTimer uiPulse;QElapsedTimer pulseClock;int maxUiGap=0,maxReadyUiGap=0,maxLoadingUiGap=0;qint64 shellReadyMs=0;bool measuringReady=false;
+    bool loadingCaptured=false,cancelRequested=false;int canceledAt=-1;qint64 cancelMs=-1;
+    if(testMode){pulseClock.start();uiPulse.setInterval(16);QObject::connect(&uiPulse,&QTimer::timeout,&app,[&]{const auto gap=int(pulseClock.restart());maxUiGap=qMax(maxUiGap,gap);if(measuringReady)maxReadyUiGap=qMax(maxReadyUiGap,gap);else if(shellReadyMs)maxLoadingUiGap=qMax(maxLoadingUiGap,gap);});uiPulse.start();}
     MainWindow window(testMode,sessionFile);
     FileReceiver receiver;
     QObject::connect(&receiver,&FileReceiver::filesRequested,&window,&MainWindow::receiveFiles);
@@ -84,6 +89,13 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
         auto completed=std::make_shared<bool>(false);
         QObject::connect(poll,&QTimer::timeout,&window,[&,poll,completed,reportPath,capturePath,searchText]{
             if(!shellReadyMs && window.windowHandle()->isExposed())shellReadyMs=GetTickCount64()-launchTick;
+            if(auto* page=window.currentPage();page && page->loading) {
+                if(!loadingCapture.isEmpty() && !loadingCaptured && page->findChild<QWidget*>("loadBar")->isVisible())loadingCaptured=window.grab().save(loadingCapture);
+                if(!cancelRequested && verifyCancelPercent>=0 && page->loadProgress()>=verifyCancelPercent) {
+                    cancelRequested=true;canceledAt=page->loadProgress();QElapsedTimer elapsed;elapsed.start();
+                    page->findChild<QToolButton*>("cancelLoad")->click();cancelMs=elapsed.elapsed();
+                }
+            }
             if(*completed || !window.allLoaded() || !window.windowHandle()->isExposed())return;
             *completed=true;poll->stop();
             const auto loadedMs=static_cast<qint64>(GetTickCount64()-launchTick);
@@ -106,10 +118,12 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
                 if(GetTickCount64()<notBefore)return;
                 if(auto* page=window.currentPage();page && page->editor && page->editor->searchBusy())return;
                 finish->stop();
-                QJsonObject report{{"version","0.5.1.0"},{"qt",qVersion()},{"tabs",window.tabCount()},{"startup_to_ready_ms",loadedMs},{"plugin_paths",QJsonArray::fromStringList(QCoreApplication::libraryPaths())}};
+                QJsonObject report{{"version","0.5.2.0"},{"qt",qVersion()},{"tabs",window.tabCount()},{"startup_to_ready_ms",loadedMs},{"plugin_paths",QJsonArray::fromStringList(QCoreApplication::libraryPaths())}};
                 const auto available=window.screen()->availableGeometry();
                 auto rectJson=[](const QRect& r){return QJsonArray{r.x(),r.y(),r.width(),r.height()};};
                 report.insert("startup_to_shell_ms",shellReadyMs);report.insert("max_ui_gap_ms",maxUiGap);report.insert("max_ready_ui_gap_ms",maxReadyUiGap);
+                report.insert("max_loading_ui_gap_ms",maxLoadingUiGap);report.insert("loading_screenshot_saved",loadingCaptured);
+                report.insert("cancel_requested",cancelRequested);report.insert("canceled_at_percent",canceledAt);report.insert("cancel_ms",cancelMs);
                 report.insert("device_pixel_ratio",window.devicePixelRatioF());report.insert("screen_count",QGuiApplication::screens().size());
                 report.insert("available_geometry",rectJson(available));report.insert("window_geometry",rectJson(window.frameGeometry()));
                 report.insert("window_fits",available.contains(window.frameGeometry()));
@@ -123,6 +137,7 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
                     report.insert("file",page->path);report.insert("ready",page->ready);report.insert("error",page->content.error);
                     report.insert("encoding",page->content.encoding);report.insert("language",page->editor->language());report.insert("search_matches",page->editor->matchCount());
                     report.insert("search_complete",!page->editor->searchBusy());
+                    report.insert("load_canceled",page->wasCanceled());
                 } else report.insert("ready",true);
                 if(!capturePath.isEmpty())report.insert("screenshot_saved",window.grab().save(capturePath));
                 if(appearanceDialog)report.insert("appearance_saved",appearanceDialog->grab().save(appearanceCapture));

@@ -24,6 +24,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QScreen>
 #include <QScrollArea>
 #include <QShortcut>
@@ -57,11 +58,41 @@ QString normalized(const QString& value) {
 }
 
 FilePage::FilePage(const QString& filename, QWidget* parent) : QWidget(parent), path(filename) {
-    auto* layout = new QVBoxLayout(this); layout->setContentsMargins(0,0,0,0);
+    auto* layout = new QVBoxLayout(this); layout->setContentsMargins(0,0,0,0);layout->setSpacing(0);
+    loadBar_=new QWidget;loadBar_->setObjectName("loadBar");
+    auto* bar=new QHBoxLayout(loadBar_);bar->setContentsMargins(14,6,12,6);bar->setSpacing(12);
+    loadLabel_=label({});loadLabel_->setMinimumWidth(155);bar->addWidget(loadLabel_);
+    loadProgress_=new QProgressBar;loadProgress_->setObjectName("loadProgress");loadProgress_->setRange(0,100);loadProgress_->setTextVisible(false);loadProgress_->setFixedHeight(5);bar->addWidget(loadProgress_,1);
+    cancel_=new QToolButton;cancel_->setObjectName("cancelLoad");cancel_->setText(QStringLiteral("取消"));cancel_->setAccessibleName(QStringLiteral("取消文件加载"));bar->addWidget(cancel_);
+    layout->addWidget(loadBar_);loadBar_->hide();
     stack_ = new QStackedWidget(this); layout->addWidget(stack_);
+    messagePage_=new QWidget;auto* body=new QVBoxLayout(messagePage_);body->addStretch();
     message_ = label(QStringLiteral("切换到此标签时载入文件")); message_->setAlignment(Qt::AlignCenter);
     message_->setWordWrap(true); message_->setMargin(40); message_->setTextFormat(Qt::PlainText);
-    stack_->addWidget(message_);
+    body->addWidget(message_);retry_=new QPushButton(QStringLiteral("重新加载"));retry_->setObjectName("retryLoad");body->addWidget(retry_,0,Qt::AlignHCenter);retry_->hide();body->addStretch();
+    stack_->addWidget(messagePage_);
+    progressTimer_.setInterval(40);connect(&progressTimer_,&QTimer::timeout,this,&FilePage::updateLoadProgress);
+    connect(cancel_,&QToolButton::clicked,this,&FilePage::cancelLoad);connect(retry_,&QPushButton::clicked,this,&FilePage::reload);
+}
+
+FilePage::~FilePage() { if(control_)control_->canceled.store(true); }
+
+void FilePage::updateLoadProgress() {
+    if(!loading || !control_)return;
+    const auto stage=control_->stage.load();
+    const auto caption=stage==LoadStage::Reading?QStringLiteral("读取文件"):stage==LoadStage::Decoding?QStringLiteral("解析文本"):QStringLiteral("准备显示");
+    const int percent=loadProgress();loadProgress_->setValue(percent);loadLabel_->setText(QStringLiteral("%1 · %2%").arg(caption).arg(percent));
+    loadProgress_->setAccessibleName(loadLabel_->text());
+    if(!ready)message_->setText(caption+QStringLiteral("…"));
+}
+
+void FilePage::cancelLoad() {
+    if(!loading || committing_)return;
+    if(control_)control_->canceled.store(true);control_.reset();++loadGeneration_;
+    loading=false;canceled_=true;progressTimer_.stop();loadBar_->hide();
+    if(ready){encoding_=loadedEncoding_;pendingPosition_.reset();stack_->setCurrentWidget(editor);}
+    else {message_->setText(QStringLiteral("已取消加载\n\n点击“重新加载”继续打开这个文件。"));retry_->show();stack_->setCurrentWidget(messagePage_);}
+    emit loadingChanged();
 }
 
 void FilePage::ensureEditor() {
@@ -73,7 +104,7 @@ void FilePage::setAppearance(const EditorAppearance& appearance) { appearance_=a
 void FilePage::setWordWrap(bool on) { wrap_=on; if(editor)editor->setWordWrap(on); }
 void FilePage::setEncoding(const QString& encoding) {
     const auto next=normalizedTextEncoding(encoding);if(next==encoding_)return;
-    encoding_=next;if(attempted)reload();
+    if(loading)cancelLoad();encoding_=next;if(attempted)reload();
 }
 void FilePage::setReadingPosition(const ReadingPosition& position) { pendingPosition_=position; }
 ReadingPosition FilePage::readingPosition() const {
@@ -92,30 +123,40 @@ void FilePage::activate() {
 void FilePage::reload() {
     if (loading) return;
     if(ready && !pendingPosition_)pendingPosition_=editor->readingPosition();
-    ensureEditor(); loading = true; attempted = true;
-    auto* future = new QFutureWatcher<FileContent>(this);
+    ensureEditor(); loading = true; attempted = true;canceled_=false;committing_=false;
+    const auto generation=++loadGeneration_;control_=std::make_shared<LoadControl>();const auto control=control_;
+    auto* future = new QFutureWatcher<PreparedFile>(this);
     message_->setText(QStringLiteral("正在读取文件…"));
-    if (!ready) stack_->setCurrentWidget(message_);
+    retry_->hide();cancel_->setEnabled(true);updateLoadProgress();progressTimer_.start();
+    if (!ready) stack_->setCurrentWidget(messagePage_);
+    QTimer::singleShot(120,this,[this,generation]{if(loading && loadGeneration_==generation)loadBar_->show();});
     const auto encoding=encoding_;
-    connect(future,&QFutureWatcher<FileContent>::finished,this,[this,future,encoding] {
-        if(encoding!=encoding_){future->deleteLater();loading=false;reload();return;}
-        content = future->result(); future->deleteLater();
+    connect(future,&QFutureWatcher<PreparedFile>::finished,this,[this,future,encoding,generation] {
+        future->deleteLater();
+        if(generation!=loadGeneration_)return;
+        auto prepared=future->result();
+        if(encoding!=encoding_){loading=false;control_.reset();reload();return;}
+        if(prepared.content.canceled){cancelLoad();return;}
+        if(prepared.content.error.isEmpty() && !prepared.document)prepared.content.error=QStringLiteral("文档准备失败，请重试。");
+        content=prepared.content;
         if (content.error.isEmpty()) {
-            editor->setContent(content,path);
-            content.utf8.clear(); content.utf8.squeeze();
-            stack_->setCurrentWidget(editor); ready = true; stale = false;
+            committing_=true;cancel_->setEnabled(false);editor->setPreparedContent(prepared,path);
+            stack_->setCurrentWidget(editor); ready = true; stale = false;loadedEncoding_=encoding;
             // Wait for the visible editor's layout before translating document lines to wrapped lines.
-            QTimer::singleShot(0,this,[this,encoding]{
-                if(encoding!=encoding_){loading=false;reload();return;}
-                applyPendingPosition();loading=false;emit loaded();
+            QTimer::singleShot(0,this,[this,encoding,generation]{
+                if(generation!=loadGeneration_)return;
+                committing_=false;
+                if(encoding!=encoding_){loading=false;control_.reset();reload();return;}
+                applyPendingPosition();loading=false;control_.reset();progressTimer_.stop();loadBar_->hide();emit loadingChanged();emit loaded();
             });
         } else {
             message_->setText(QStringLiteral("无法打开这个文件\n\n%1\n\n可点击底部编码切换，或通过“文件 → 重新载入”重试。").arg(content.error));
-            stack_->setCurrentWidget(message_); ready = false;
-            loading=false; emit loaded();
+            stack_->setCurrentWidget(messagePage_);retry_->show();ready = false;
+            loading=false;control_.reset();progressTimer_.stop();loadBar_->hide();emit loadingChanged();emit loaded();
         }
     });
-    future->setFuture(QtConcurrent::run([filename=path,encoding] { return readFile(filename,encoding); }));
+    future->setFuture(QtConcurrent::run([filename=path,encoding,control] {return prepareFile(filename,encoding,control);}));
+    emit loadingChanged();
 }
 
 FileTabs::FileTabs(QWidget* parent) : QTabBar(parent) {
@@ -230,7 +271,7 @@ MainWindow::MainWindow(bool testMode, const QString& sessionFile) : settings_("s
     auto* status=new QWidget; status->setObjectName("statusbar"); status->setFixedHeight(28);
     auto* statusLayout=new QHBoxLayout(status); statusLayout->setContentsMargins(10,0,9,0); statusLayout->setSpacing(4);
     auto* lock=glyphLabel("lock","muted",14);statusLayout->addWidget(lock);
-    statusLayout->addWidget(label(QStringLiteral("只读"),"status")); fileInfo_=label("Zex 0.5.1","status"); statusLayout->addWidget(fileInfo_);
+    statusLayout->addWidget(label(QStringLiteral("只读"),"status")); fileInfo_=label("Zex 0.5.2","status"); statusLayout->addWidget(fileInfo_);
     encodingButton_=new QToolButton;encodingButton_->setObjectName("encodingButton");encodingButton_->setPopupMode(QToolButton::InstantPopup);encodingButton_->setMenu(encodingMenu_);encodingButton_->setAccessibleName(QStringLiteral("文件编码"));statusLayout->addWidget(encodingButton_);
     sessionNotice_=label(QStringLiteral("会话未保存"),"sessionNotice");sessionNotice_->hide();statusLayout->addWidget(sessionNotice_);
     statusLayout->addStretch(); position_=label({},"status"); language_=label({},"status"); statusLayout->addWidget(position_); statusLayout->addWidget(language_);
@@ -315,7 +356,7 @@ void MainWindow::buildMenus(QToolButton* file, QToolButton* view, QToolButton* h
     views->addAction(QStringLiteral("Windows 集成…"),this,[this]{IntegrationDialog dialog(ShellIntegration(QCoreApplication::applicationFilePath()),this);dialog.exec();});
     auto* helps=new QMenu(this);help->setMenu(helps);
     helps->addAction(QStringLiteral("快捷键"),this,[this]{QMessageBox::information(this,QStringLiteral("Zex · 快捷键"),QStringLiteral("Ctrl+O    打开一个或多个文件\nCtrl+F    搜索当前文件\nEnter / Shift+Enter    下一个 / 上一个结果\nF3 / Shift+F3    下一个 / 上一个结果\nEsc    关闭搜索\nCtrl+G    跳转到行\nCtrl+W / 鼠标中键    关闭标签\nCtrl+Shift+T    恢复标签\nCtrl+Tab / Ctrl+Shift+Tab    切换标签\nAlt+1 … Alt+9    切换到指定标签\nAlt+Z    自动换行\nCtrl++ / Ctrl+- / Ctrl+0    调整字号\nCtrl+,    外观设置\nF5    重新载入文件\n\n支持拖入文件和拖动标签排序。"));});
-    helps->addAction(QStringLiteral("关于 Zex"),this,[this]{QMessageBox::about(this,QStringLiteral("关于 Zex"),QStringLiteral("<h2>Zex <small>0.5.1</small></h2><p>专注于文件与代码的桌面阅读器。</p><p>C++ · Qt 6 · Scintilla · Lexilla</p><p>Copyright (c) 2026 sixunited.<br>Author: sclliang</p><p>本版本支持只读查看，不会修改打开的文件。<br>开源组件许可位于 bin/licenses。</p>"));});
+    helps->addAction(QStringLiteral("关于 Zex"),this,[this]{QMessageBox::about(this,QStringLiteral("关于 Zex"),QStringLiteral("<h2>Zex <small>0.5.2</small></h2><p>专注于文件与代码的桌面阅读器。</p><p>C++ · Qt 6 · Scintilla · Lexilla</p><p>Copyright (c) 2026 sixunited.<br>Author: sclliang</p><p>本版本支持只读查看，不会修改打开的文件。<br>开源组件许可位于 bin/licenses。</p>"));});
 }
 
 QWidget* MainWindow::buildWelcome() {
@@ -369,6 +410,7 @@ FilePage* MainWindow::addPage(const QString& path, const ReadingPosition& positi
         connect(page->editor,&CodeEditor::searchChanged,this,[this,page]{if(page==currentPage())updateSearchLabel();});
         connect(page->editor,&CodeEditor::fileDropped,this,[this](const QString& p){openPath(p);});
     });
+    connect(page,&FilePage::loadingChanged,this,[this,page]{if(page==currentPage())refreshStatus();scheduleSessionSave();});
     return page;
 }
 
@@ -472,11 +514,11 @@ void MainWindow::refreshStatus() {
         reloadButton_->setText(page->stale?QStringLiteral("文件已变化 · 重新载入"):QStringLiteral("重试打开"));
         reloadButton_->setVisible(page->stale || (page->attempted && !page->ready && !page->loading));
         if(page->ready){fileInfo_->setText(QStringLiteral("%1   ·   %2").arg(page->content.lineEnding,QLocale().formattedDataSize(page->content.originalSize)));position_->setText(page->editor->positionSummary());language_->setText(page->editor->language());}
-        else {fileInfo_->setText(page->loading?QStringLiteral("正在读取…"):QStringLiteral("无法读取"));position_->clear();language_->clear();}
+        else {fileInfo_->setText(page->loading?QStringLiteral("正在读取…"):page->wasCanceled()?QStringLiteral("已取消加载"):QStringLiteral("无法读取"));position_->clear();language_->clear();}
     } else {
         encodingButton_->hide();
         fileIcon_->setPixmap(Theme::icon("file",Theme::colors().subtle).pixmap(QSize(18,18),devicePixelRatioF()));
-        title_->setText("Zex");setWindowTitle("Zex");pathLabel_->setText(QStringLiteral("文件阅读器"));pathLabel_->setToolTip({});reloadButton_->hide();fileInfo_->setText("Zex 0.5.1");position_->clear();language_->clear();
+        title_->setText("Zex");setWindowTitle("Zex");pathLabel_->setText(QStringLiteral("文件阅读器"));pathLabel_->setToolTip({});reloadButton_->hide();fileInfo_->setText("Zex 0.5.2");position_->clear();language_->clear();
     }
 }
 

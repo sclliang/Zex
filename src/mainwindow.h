@@ -12,12 +12,18 @@ class QToolButton;
 class QStackedWidget;
 class QMenu;
 class QVBoxLayout;
+class QProgressBar;
+class QPushButton;
 
 class FilePage : public QWidget {
     Q_OBJECT
 public:
     explicit FilePage(const QString& path, QWidget* parent = nullptr);
+    ~FilePage() override;
     void reload();
+    void cancelLoad();
+    int loadProgress() const { return control_?control_->percent.load():ready?100:0; }
+    bool wasCanceled() const { return canceled_; }
     void activate();
     void setAppearance(const EditorAppearance& appearance);
     void setWordWrap(bool on);
@@ -35,14 +41,28 @@ public:
 signals:
     void loaded();
     void editorCreated();
+    void loadingChanged();
 private:
     void ensureEditor();
     void applyPendingPosition();
+    void updateLoadProgress();
     QStackedWidget* stack_;
     QLabel* message_;
+    QWidget* messagePage_;
+    QWidget* loadBar_;
+    QLabel* loadLabel_;
+    QProgressBar* loadProgress_;
+    QPushButton* retry_;
+    QToolButton* cancel_;
+    QTimer progressTimer_;
+    LoadControlPtr control_;
+    quint64 loadGeneration_ = 0;
+    bool canceled_ = false;
+    bool committing_ = false;
     EditorAppearance appearance_;
     bool wrap_ = false;
     QString encoding_ = "auto";
+    QString loadedEncoding_ = "auto";
     std::optional<ReadingPosition> pendingPosition_;
 };
 

@@ -17,8 +17,11 @@ QString textEncodingName(const QString& encoding) {
     return QStringLiteral("自动识别");
 }
 
-FileContent decodeFile(const QByteArray& bytes,const QString& requested) {
+FileContent decodeFile(const QByteArray& bytes,const QString& requested,const LoadControlPtr& control) {
     FileContent result;
+    auto stopped=[&]{if(control && control->canceled.load()){result.canceled=true;return true;}return false;};
+    if(stopped())return result;
+    if(control)control->update(LoadStage::Decoding,20);
     result.originalSize = bytes.size();
     QString text;
     auto decode = [&](QStringConverter::Encoding encoding, const QString& name) {
@@ -72,7 +75,8 @@ FileContent decodeFile(const QByteArray& bytes,const QString& requested) {
             decodeLegacy("gb18030");
         }
     }
-    if (!result.error.isEmpty()) return result;
+    if(stopped() || !result.error.isEmpty()) return result;
+    if(control)control->update(LoadStage::Decoding,40);
     if (text.startsWith(QChar(0xfeff))) text.remove(0, 1);
     if (text.contains(QChar(0))) {
         result.error = QStringLiteral("文件含有空字符，可能不是文本文件。");
@@ -80,26 +84,37 @@ FileContent decodeFile(const QByteArray& bytes,const QString& requested) {
     }
     bool crlf = false, lf = false, cr = false;
     qsizetype lineLength = 0, longest = 0;
-    for (qsizetype i = 0; i < text.size(); ++i) {
-        const auto c = text.at(i);
-        if (c == '\r' || c == '\n') {
-            longest = qMax(longest, lineLength);
-            lineLength = 0;
-            if (c == '\r') {
-                if (i + 1 < text.size() && text.at(i + 1) == '\n') { crlf = true; ++i; }
-                else cr = true;
-            } else lf = true;
-        } else ++lineLength;
+    qsizetype i=0;
+    while(i<text.size()) {
+        if(stopped())return result;
+        if(control)control->percent.store(40+int(25*i/qMax<qsizetype>(1,text.size())));
+        const auto end=qMin<qsizetype>(i+65536,text.size());
+        for(;i<end;++i) {
+            const auto c = text.at(i);
+            if (c == '\r' || c == '\n') {
+                longest = qMax(longest, lineLength);
+                lineLength = 0;
+                if (c == '\r') {
+                    if (i + 1 < text.size() && text.at(i + 1) == '\n') { crlf = true; ++i; }
+                    else cr = true;
+                } else lf = true;
+            } else ++lineLength;
+        }
     }
     longest = qMax(longest, lineLength);
     result.lineEnding = int(crlf) + int(lf) + int(cr) > 1 ? "混合换行" : crlf ? "CRLF" : cr ? "CR" : "LF";
     result.large = bytes.size() > 8 * 1024 * 1024 || longest > 20000;
+    if(stopped())return result;
+    if(control)control->percent.store(65);
     result.utf8 = text.toUtf8();
+    if(stopped()){result.utf8.clear();return result;}
+    if(control)control->percent.store(70);
     return result;
 }
 
-FileContent readFile(const QString& path,const QString& encoding) {
+FileContent readFile(const QString& path,const QString& encoding,const LoadControlPtr& control) {
     FileContent result;
+    if(control && control->canceled.load()){result.canceled=true;return result;}
     const QFileInfo info(path);
     if (!info.isFile()) {
         result.error = QStringLiteral("文件不存在或不是普通文件。\n%1").arg(path);
@@ -107,7 +122,7 @@ FileContent readFile(const QString& path,const QString& encoding) {
     }
     constexpr qint64 maximum = 256ll * 1024 * 1024;
     if (info.size() > maximum) {
-        result.error = QStringLiteral("首版支持最大 256 MB 的文本文件。");
+        result.error = QStringLiteral("支持最大 256 MiB 的文本文件。");
         return result;
     }
     QFile file(path);
@@ -115,10 +130,17 @@ FileContent readFile(const QString& path,const QString& encoding) {
         result.error = QStringLiteral("无法读取文件：%1").arg(file.errorString());
         return result;
     }
-    auto bytes = file.read(maximum + 1);
+    QByteArray bytes;bytes.reserve(info.size());
+    while(!file.atEnd() && bytes.size()<=maximum) {
+        if(control && control->canceled.load()){result.canceled=true;return result;}
+        const auto block=file.read(qMin<qint64>(2*1024*1024,maximum+1-bytes.size()));
+        if(block.isEmpty() && !file.atEnd()){result.error=QStringLiteral("文件读取失败。");return result;}
+        bytes.append(block);
+        if(control)control->update(LoadStage::Reading,int(qMin<qint64>(20,20*bytes.size()/qMax<qint64>(1,info.size()))));
+    }
     if (file.error() != QFileDevice::NoError || bytes.size() > maximum || !file.atEnd()) {
         result.error = QStringLiteral("文件读取失败或读取期间文件大小超出限制。");
         return result;
     }
-    return decodeFile(bytes,encoding);
+    return decodeFile(bytes,encoding,control);
 }
