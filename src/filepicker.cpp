@@ -2,6 +2,7 @@
 #include "theme.h"
 #include "windowplacement.h"
 #include <QAbstractListModel>
+#include <QAction>
 #include <QDir>
 #include <QKeyEvent>
 #include <QLabel>
@@ -78,21 +79,22 @@ private:
 class FileChoiceDelegate : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
-    QSize sizeHint(const QStyleOptionViewItem& option,const QModelIndex&) const override{return {300,qMax(58,option.fontMetrics.height()*2+16)};}
+    QSize sizeHint(const QStyleOptionViewItem& option,const QModelIndex&) const override{return {300,qMax(48,option.fontMetrics.height()*2+12)};}
     void paint(QPainter* painter,const QStyleOptionViewItem& option,const QModelIndex& index) const override {
         painter->save();painter->setClipRect(option.rect);
         const auto& c=Theme::colors();const bool selected=option.state&QStyle::State_Selected;
         painter->fillRect(option.rect,selected?c.selection:(option.state&QStyle::State_MouseOver)?c.hover:c.elevated);
         const auto rect=option.rect;const int line=option.fontMetrics.height();
-        index.data(Qt::DecorationRole).value<QIcon>().paint(painter,QRect(rect.left()+12,rect.top()+(rect.height()-20)/2,20,20));
+        index.data(Qt::DecorationRole).value<QIcon>().paint(painter,QRect(rect.left()+12,rect.top()+(rect.height()-16)/2,16,16));
         const auto tag=index.data(Qt::UserRole+1).toString();const int tagWidth=option.fontMetrics.horizontalAdvance(tag)+18;
-        const QRect nameRect(rect.left()+44,rect.top()+7,rect.width()-60-tagWidth,line);
+        const QRect nameRect(rect.left()+40,rect.top()+5,rect.width()-56-tagWidth,line);
         painter->setFont(option.font);painter->setPen(c.text);
         painter->drawText(nameRect,Qt::AlignVCenter,option.fontMetrics.elidedText(index.data().toString(),Qt::ElideMiddle,nameRect.width()));
-        painter->setPen(c.muted);painter->drawText(QRect(rect.right()-tagWidth,rect.top()+7,tagWidth-12,line),Qt::AlignRight|Qt::AlignVCenter,tag);
+        auto detailFont=option.font;detailFont.setPixelSize(12);painter->setFont(detailFont);const QFontMetrics detailMetrics(detailFont);
+        painter->setPen(c.muted);painter->drawText(QRect(rect.right()-tagWidth,rect.top()+5,tagWidth-12,line),Qt::AlignRight|Qt::AlignVCenter,tag);
         const auto path=QDir::toNativeSeparators(index.data(Qt::UserRole).toString());
-        const QRect pathRect(rect.left()+44,rect.top()+9+line,rect.width()-58,line);
-        painter->drawText(pathRect,Qt::AlignVCenter,option.fontMetrics.elidedText(path,Qt::ElideMiddle,pathRect.width()));
+        const QRect pathRect(rect.left()+40,rect.top()+7+line,rect.width()-54,line);
+        painter->drawText(pathRect,Qt::AlignVCenter,detailMetrics.elidedText(path,Qt::ElideMiddle,pathRect.width()));
         painter->restore();
     }
 };
@@ -103,11 +105,12 @@ FilePickerDialog::FilePickerDialog(QVector<FileChoice> choices,bool tabsOnly,QWi
     setMinimumSize(340,220);resize(tabsOnly?580:680,440);
     auto* layout=new QVBoxLayout(this);layout->setContentsMargins(12,10,12,8);layout->setSpacing(9);
     auto* row=new QHBoxLayout;auto* title=new QLabel(windowTitle());row->addWidget(title);row->addStretch();
-    auto* close=new QToolButton;close->setIcon(Theme::icon("close"));close->setToolTip(QStringLiteral("关闭 (Esc)"));close->setAccessibleName(close->toolTip());row->addWidget(close);connect(close,&QToolButton::clicked,this,&QDialog::reject);layout->addLayout(row);
-    input_=new QLineEdit;input_->setObjectName("filePickerInput");input_->setPlaceholderText(QStringLiteral("输入文件名或路径，支持模糊匹配"));input_->setAccessibleName(QStringLiteral("筛选文件"));input_->setClearButtonEnabled(true);input_->setMaxLength(512);layout->addWidget(input_);
+    auto* close=new QToolButton;close->setIcon(Theme::icon("close",Theme::colors().muted));close->setIconSize({16,16});close->setFixedSize(24,24);close->setToolTip(QStringLiteral("关闭 (Esc)"));close->setAccessibleName(close->toolTip());row->addWidget(close);connect(close,&QToolButton::clicked,this,&QDialog::reject);layout->addLayout(row);
+    input_=new QLineEdit;input_->setObjectName("filePickerInput");input_->setPlaceholderText(QStringLiteral("输入文件名或路径，支持模糊匹配"));input_->setAccessibleName(QStringLiteral("筛选文件"));input_->setMaxLength(512);layout->addWidget(input_);
+    auto* clear=input_->addAction(Theme::icon("close",Theme::colors().muted),QLineEdit::TrailingPosition);clear->setText(QStringLiteral("清空筛选"));clear->setVisible(false);connect(clear,&QAction::triggered,input_,&QLineEdit::clear);connect(input_,&QLineEdit::textChanged,clear,[clear](const QString& text){clear->setVisible(!text.isEmpty());});
     list_=new QListView;list_->setObjectName("filePickerList");list_->setAccessibleName(windowTitle());list_->setMouseTracking(true);list_->setUniformItemSizes(true);list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);list_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     model_=new FileChoiceModel(std::move(choices),this);list_->setModel(model_);list_->setItemDelegate(new FileChoiceDelegate(list_));layout->addWidget(list_,1);
-    summary_=new QLabel;summary_->setObjectName("muted");layout->addWidget(summary_);
+    summary_=new QLabel;summary_->setObjectName("muted");summary_->setStyleSheet("font-size:11px;");layout->addWidget(summary_);
     auto filter=[this](const QString& query){model_->filter(query);if(model_->rowCount())list_->setCurrentIndex(model_->index(0,0));summary_->setText(model_->rowCount()?QStringLiteral("%1 个文件    ↑ ↓ 选择    Enter 打开    Esc 关闭").arg(model_->rowCount()):QStringLiteral("没有匹配的文件"));};
     connect(input_,&QLineEdit::textChanged,this,filter);filter({});
     connect(input_,&QLineEdit::returnPressed,this,&FilePickerDialog::chooseCurrent);connect(list_,&QListView::activated,this,[this]{chooseCurrent();});
@@ -119,7 +122,7 @@ bool FilePickerDialog::eventFilter(QObject* object,QEvent* event) {
     if(object==input_ && event->type()==QEvent::KeyPress) {
         const auto* keyEvent=static_cast<QKeyEvent*>(event);int delta=0;
         if(keyEvent->key()==Qt::Key_Up)delta=-1;else if(keyEvent->key()==Qt::Key_Down)delta=1;
-        else if(keyEvent->key()==Qt::Key_PageUp)delta=-qMax(1,list_->height()/58);else if(keyEvent->key()==Qt::Key_PageDown)delta=qMax(1,list_->height()/58);
+        else if(keyEvent->key()==Qt::Key_PageUp)delta=-qMax(1,list_->height()/qMax(1,list_->sizeHintForRow(0)));else if(keyEvent->key()==Qt::Key_PageDown)delta=qMax(1,list_->height()/qMax(1,list_->sizeHintForRow(0)));
         if(delta){if(model_->rowCount()){const auto next=model_->index(qBound(0,list_->currentIndex().row()+delta,model_->rowCount()-1),0);list_->setCurrentIndex(next);list_->scrollTo(next);}return true;}
     }
     return QDialog::eventFilter(object,event);

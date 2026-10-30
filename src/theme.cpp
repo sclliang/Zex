@@ -17,9 +17,9 @@ QString activeTheme = "graphite";
 const QList<Theme::Colors>& presets() {
     static const QList<Theme::Colors> values{
         {"graphite",QStringLiteral("石墨 · 深色"),true,
-            "#202127","#191a20","#272932","#d5d9e2","#9198aa","#70798d","#8ca9ed","#162039",
-            "#333744","#1b1d24","#303544","#3b4c6a","#4e5565",
-            "#8b96aa","#c5a0e3","#a0bc8a","#d5b27b","#8eb8e8","#dc91a0","#e28e9e"},
+            "#1f1f1f","#181818","#262626","#d4d4d4","#a0a0a0","#707070","#4daafc","#ffffff",
+            "#2b2b2b","#242424","#303030","#264f78","#494949",
+            "#6a9955","#c586c0","#ce9178","#b5cea8","#9cdcfe","#569cd6","#f48771"},
         {"midnight",QStringLiteral("午夜蓝 · 深色"),true,
             "#131b28","#0e1520","#1d293b","#cbd8ec","#8fa4c1","#6d829d","#76b5f5","#0b2038",
             "#2b3a50","#101724","#27384f","#2d4b70","#425b79",
@@ -80,39 +80,9 @@ QIcon Theme::swatch(const QString& id) {
 
 QString Theme::codeFont() {
     const auto families = QFontDatabase::families();
-    for (auto f : {"Cascadia Code", "Cascadia Mono", "Consolas"})
+    for (auto f : {"Cascadia Mono", "Consolas", "Cascadia Code"})
         if (families.contains(QLatin1String(f))) return QLatin1String(f);
     return QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
-}
-
-QIcon Theme::icon(const QString& name, QColor color, int size) {
-    QPixmap pix(size * 2, size * 2);
-    pix.setDevicePixelRatio(2);
-    pix.fill(Qt::transparent);
-    QPainter p(&pix);
-    p.setRenderHint(QPainter::Antialiasing);
-    p.scale(size / 20.0, size / 20.0);
-    p.setPen(QPen(color, 1.35, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    if (name == "close") { p.drawLine(QPointF(6,6),QPointF(14,14)); p.drawLine(QPointF(14,6),QPointF(6,14)); }
-    else if (name == "plus") { p.drawLine(QPointF(10,5),QPointF(10,15)); p.drawLine(QPointF(5,10),QPointF(15,10)); }
-    else if (name == "minimize") p.drawLine(QPointF(5,11),QPointF(15,11));
-    else if (name == "maximize") p.drawRect(QRectF(5.5,5.5,9,9));
-    else if (name == "restore") { p.drawRect(QRectF(4.5,7,8,8)); p.drawPolyline(QPolygonF({{7,7},{7,4},{15,4},{15,12},{12.5,12}})); }
-    else if (name == "search") { p.drawEllipse(QRectF(4,3,9,9)); p.drawLine(QPointF(12,11),QPointF(16,15)); }
-    else if (name == "up") p.drawPolyline(QPolygonF({{5,12},{10,7},{15,12}}));
-    else if (name == "down") p.drawPolyline(QPolygonF({{5,8},{10,13},{15,8}}));
-    else if (name == "files") { p.drawRoundedRect(QRectF(3,6,10,11),1,1);p.drawPolyline(QPolygonF({{7,6},{7,3},{17,3},{17,13},{13,13}})); }
-    else if (name == "pin") { p.drawPolygon(QPolygonF({{7,3},{14,3},{13,8},{16,11},{5,11},{8,8}}));p.drawLine(QPointF(10,11),QPointF(10,17)); }
-    else if (name == "stop")p.drawRect(QRectF(6,6,8,8));
-    else if (name == "split") {p.drawRoundedRect(QRectF(3,4,14,12),1,1);p.drawLine(QPointF(10,4),QPointF(10,16));}
-    else if (name == "list") {for(int y:{5,10,15}){p.drawPoint(QPointF(4,y));p.drawLine(QPointF(8,y),QPointF(17,y));}}
-    else if (name == "right") p.drawPolyline(QPolygonF({{8,5},{13,10},{8,15}}));
-    else if (name == "folder") { p.drawPolygon(QPolygonF({{3,6},{8,6},{10,8},{17,8},{16,15},{3,15}})); p.drawPolyline(QPolygonF({{3,6},{3,4},{8,4},{10,6},{16,6},{16,8}})); }
-    else if (name == "wrap") { p.drawLine(QPointF(3,5),QPointF(17,5)); p.drawLine(QPointF(3,9),QPointF(13,9)); p.drawArc(QRectF(10,9,7,6),-90*16,180*16); p.drawLine(QPointF(13,15),QPointF(9,15)); p.drawPolyline(QPolygonF({{11,13},{9,15},{11,17}})); p.drawLine(QPointF(3,14),QPointF(6,14)); }
-    else if (name == "lock") { p.drawRoundedRect(QRectF(5,9,10,8),1,1); p.drawArc(QRectF(7,3,6,10),0,180*16); }
-    else if (name == "zex") { p.setPen(QPen(color,2.2,Qt::SolidLine,Qt::SquareCap,Qt::MiterJoin)); p.drawPolyline(QPolygonF({{4,4},{15,4},{4,16},{16,16}})); p.drawLine(QPointF(8,10),QPointF(15,10)); }
-    else { p.drawPolygon(QPolygonF({{5,2},{12,2},{16,6},{16,17},{5,17}})); p.drawPolyline(QPolygonF({{12,2},{12,6},{16,6}})); }
-    return QIcon(pix);
 }
 
 QIcon Theme::fileIcon(const QString& path) { return FileIcons::icon(path); }
@@ -126,28 +96,39 @@ QString styleSheet(const Theme::Colors& c) {
       QDialog { background: @background; color: @text; }
       QDialog#filePicker { background: @elevated; border: 1px solid @border; }
       QListView#filePickerList { background: @elevated; border: none; outline: none; }
-      QWidget#searchResultsPanel { background: @elevated; border-top: 1px solid @border; }
-      QListView#searchResultsList { background: @elevated; color: @text; border: none; outline: none; }
-      QListView#searchResultsList::item { padding: 5px 8px; }
+      QWidget#searchResultsPanel { background: @background; border-top: 1px solid @border; }
+      QListView#searchResultsList { background: @background; color: @text; border: none; outline: none; }
+      QListView#searchResultsList::item { padding: 4px 8px; }
+      QListView#searchResultsList::item:hover { background: @hover; }
       QListView#searchResultsList::item:selected { background: @selection; color: @text; }
       QSplitter::handle { background: @border; }
-      QWidget#paneHeader { background: @chrome; border-bottom: 1px solid @border; }
-      QWidget#paneHeader[active="true"] { border-bottom: 2px solid @accent; }
+      QSplitter::handle:hover { background: @accent; }
+      QWidget#paneHeader { background: @background; border-bottom: 1px solid @border; }
+      QWidget#paneHeader QLabel { color: @muted; font-size: 12px; }
+      QWidget#paneHeader[active="true"] QLabel { color: @text; }
+      QWidget#paneHeader[active="true"] { border-bottom: 1px solid @accent; }
       QWidget#titlebar { background: @chrome; }
       QWidget#tabstrip { background: @chrome; border-bottom: 1px solid @border; }
-      QWidget#breadcrumb { background: @background; border-bottom: 1px solid @border; }
-      QWidget#searchbar { background: @elevated; border-bottom: 1px solid @border; }
+      QTabBar#fileTabs QToolButton { background: @chrome; border-radius: 0; border-left: 1px solid @border; width: 22px; }
+      QTabBar#fileTabs QToolButton:hover { background: @hover; }
+      QWidget#breadcrumb { background: @background; }
+      QWidget#searchbar { background: @elevated; border: 1px solid @border; border-radius: 3px; }
+      QWidget#searchbar QToolButton { padding: 2px; border-radius: 2px; }
+      QWidget#searchbar QLineEdit { padding: 3px 6px; border-radius: 2px; }
       QWidget#statusbar { background: @chrome; border-top: 1px solid @border; }
       QLabel { background: transparent; color: @text; border: none; }
       QLabel#muted { color: @muted; }
       QLabel#path { color: @muted; font-size: 12px; }
-      QLabel#status { color: @muted; font-size: 12px; padding: 0 6px; }
-      QLabel#sessionNotice { color: @error; font-size: 12px; padding: 0 6px; }
-      QLabel#brand { color: @text; font-size: 34px; font-weight: 600; }
-      QLabel#subtitle { color: @muted; font-size: 13px; }
+      QLabel#status { color: @muted; font-size: 11px; padding: 0 5px; }
+      QLabel#sessionNotice { color: @error; font-size: 11px; padding: 0 5px; }
+      QLabel#brand { color: @text; font-size: 42px; font-weight: 400; }
+      QLabel#subtitle { color: @muted; font-size: 14px; }
+      QLabel#welcomeTab { background: @background; color: @text; border-top: 1px solid @accent; border-right: 1px solid @border; padding-left: 16px; }
+      QLabel#sectionHeading { color: @text; font-size: 13px; font-weight: 600; }
+      QLabel#keycap { color: @muted; font-size: 11px; border: 1px solid @border; border-radius: 3px; padding: 1px 5px; }
       QLabel#dialogHeading { color: @text; font-size: 20px; font-weight: 600; }
       QLabel#shortcutKey { color: @muted; font-family: 'Consolas'; font-size: 12px; }
-      QToolButton { background: transparent; border: none; border-radius: 4px; padding: 4px; color: @muted; }
+      QToolButton { background: transparent; border: none; border-radius: 3px; padding: 3px; color: @muted; }
       QToolButton:hover { background: @hover; color: @text; }
       QToolButton:pressed { background: @selection; }
       QToolButton:checked { background: @selection; color: @text; }
@@ -155,10 +136,10 @@ QString styleSheet(const Theme::Colors& c) {
       QToolButton#windowButton { border-radius: 0; }
       QToolButton#windowClose:hover { background: @error; }
       QToolButton::menu-indicator { image: none; width: 0; }
-      QLineEdit { background: @input; color: @text; border: 1px solid @border; border-radius: 5px; padding: 6px 10px; selection-background-color: @selection; selection-color: @text; }
+      QLineEdit { background: @input; color: @text; border: 1px solid @border; border-radius: 3px; padding: 5px 8px; selection-background-color: @selection; selection-color: @text; }
       QLineEdit:focus { border-color: @accent; }
       QLineEdit[invalid="true"] { border-color: @error; }
-      QComboBox, QSpinBox { background: @input; color: @text; border: 1px solid @border; border-radius: 4px; padding: 6px 10px; min-height: 20px; }
+      QComboBox, QSpinBox { background: @input; color: @text; border: 1px solid @border; border-radius: 3px; padding: 4px 8px; min-height: 20px; }
       QComboBox:focus, QSpinBox:focus { border-color: @accent; }
       QComboBox::drop-down { border: none; width: 24px; }
       QComboBox::down-arrow { image: url(:/ui/chevron-down@arrow.svg); width: 12px; height: 12px; }
@@ -173,27 +154,32 @@ QString styleSheet(const Theme::Colors& c) {
       QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid @subtle; border-radius: 3px; background: @input; }
       QCheckBox::indicator:hover { border-color: @accent; }
       QCheckBox::indicator:checked { background: @accent; border-color: @accent; image: url(:/ui/check-@check.svg); }
-      QPushButton { color: @text; background: @elevated; border: 1px solid @border; border-radius: 5px; padding: 9px 18px; }
+      QPushButton { color: @text; background: @elevated; border: 1px solid @border; border-radius: 3px; padding: 6px 14px; }
       QPushButton:hover { background: @hover; border-color: @accent; }
       QPushButton:default { border-color: @accent; }
       QPushButton#openPrimary { background: @accent; border: 1px solid @accent; color: @accentText; font-weight: 600; }
       QPushButton#openPrimary:hover { background: @accentHover; }
+      QPushButton#quickOpenTitle { background: @input; border: 1px solid @border; border-radius: 5px; padding: 0; }
+      QPushButton#quickOpenTitle:hover { background: @hover; border-color: @subtle; }
+      QPushButton#quickOpenTitle QLabel { color: @muted; font-size: 12px; }
+      QToolButton#welcomeAction { text-align: left; color: @accent; padding: 7px 8px; }
+      QToolButton#recentWelcome { text-align: left; padding: 7px 8px; }
       QWidget#loadBar { background: @elevated; border-bottom: 1px solid @border; }
       QWidget#followBar { background: @elevated; border-bottom: 1px solid @border; }
       QLabel#followStatus { color: @muted; }
       QProgressBar { background: @border; border: none; border-radius: 2px; }
       QProgressBar::chunk { background: @accent; border-radius: 2px; }
-      QMenu { background: @elevated; color: @text; border: 1px solid @border; border-radius: 6px; padding: 5px; }
-      QMenu::item { padding: 7px 32px 7px 12px; border-radius: 3px; }
+      QMenu { background: @elevated; color: @text; border: 1px solid @border; border-radius: 4px; padding: 4px; }
+      QMenu::item { padding: 5px 30px 5px 10px; border-radius: 3px; }
       QMenu::item:selected { background: @selection; }
       QMenu::item:disabled { color: @subtle; }
       QMenu::separator { height: 1px; background: @border; margin: 4px 8px; }
       QToolTip { color: @text; background: @elevated; border: 1px solid @border; padding: 5px; }
-      QScrollBar:vertical { background: @background; width: 12px; margin: 0; }
-      QScrollBar::handle:vertical { background: @scrollbar; min-height: 30px; border: 3px solid @background; border-radius: 5px; }
+      QScrollBar:vertical { background: @background; width: 10px; margin: 0; }
+      QScrollBar::handle:vertical { background: @scrollbar; min-height: 28px; border: 2px solid @background; border-radius: 3px; }
       QScrollBar::handle:vertical:hover { background: @muted; }
-      QScrollBar:horizontal { background: @background; height: 12px; margin: 0; }
-      QScrollBar::handle:horizontal { background: @scrollbar; min-width: 30px; border: 3px solid @background; border-radius: 5px; }
+      QScrollBar:horizontal { background: @background; height: 10px; margin: 0; }
+      QScrollBar::handle:horizontal { background: @scrollbar; min-width: 28px; border: 2px solid @background; border-radius: 3px; }
       QScrollBar::handle:horizontal:hover { background: @muted; }
       QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
       QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
@@ -215,7 +201,7 @@ QString styleSheet(const Theme::Colors& c) {
 void Theme::apply(QApplication& app,const QString& id) {
     static const bool initialized=[&app] {
         initializeUiResources();app.setStyle(QStyleFactory::create("Fusion"));
-        QFont font("Segoe UI",10);font.setFamilies({"Segoe UI","Microsoft YaHei UI","Microsoft YaHei"});app.setFont(font);
+        QFont font; font.setFamilies({"Segoe UI","Microsoft YaHei UI","Microsoft YaHei"});font.setPixelSize(13);app.setFont(font);
         QFontDatabase::addApplicationFallbackFontFamily(QChar::Script_Han,"Microsoft YaHei UI");return true;
     }();
     Q_UNUSED(initialized);

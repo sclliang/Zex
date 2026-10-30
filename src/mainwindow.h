@@ -15,6 +15,7 @@ class QToolButton;
 class QStackedWidget;
 class QMenu;
 class QVBoxLayout;
+class QBoxLayout;
 class QProgressBar;
 class QPushButton;
 class QSplitter;
@@ -162,6 +163,9 @@ private:
     void connectPage(FilePage* page);
     void setSecondaryPath(const QString& path);
     void refreshPaneHeaders();
+    void positionSearchBar();
+    QWidget* editorHost_ = nullptr;
+    QBoxLayout* searchLayout_ = nullptr;
     QSplitter* paneSplit_ = nullptr;
     QWidget* leftPane_ = nullptr;
     QWidget* rightPane_ = nullptr;

@@ -1,4 +1,4 @@
-Zex 0.7.0.0
+Zex 0.8.0.0
 Copyright (c) 2026 sixunited. Author: sclliang
 
 Qt 6.8.3 (Qt Core, GUI, Widgets, Concurrent, Core5Compat, SVG and platform/image plugins)
@@ -42,4 +42,13 @@ The Seti icon font is converted from WOFF to TTF without changing glyphs; the mo
 Microsoft Visual C++ Redistributable DLLs
 Copyright Microsoft Corporation. Distributed as app-local runtime components under the Visual Studio redistribution terms.
 
-The Zex name, icon and application interface were created for this project. Zex is not affiliated with Zed Industries.
+Microsoft Codicons (24 user-interface icons)
+Copyright Microsoft Corporation and contributors.
+Source: https://github.com/microsoft/vscode-codicons/tree/ceaa8663a7e63e2bac7f1ecac128ce31404b7487
+Icon artwork license: Creative Commons Attribution 4.0 International (CC BY 4.0).
+License: https://creativecommons.org/licenses/by/4.0/ and FileIcons/Codicons-CC-BY-4.0.txt.
+SVG paths are retained unchanged; Zex substitutes theme colors at rendering time.
+Pinned source filenames and SHA-256 hashes: FileIcons/Codicons-SOURCES.json.
+The upstream code license (MIT) is also retained in FileIcons/Codicons-MIT-code.txt; it does not replace the artwork license.
+
+The Zex name and app icon were created for this project. Zex is not affiliated with Zed Industries or Microsoft.

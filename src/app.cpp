@@ -12,10 +12,12 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLineEdit>
+#include <QLabel>
 #include <QListView>
 #include <QToolButton>
 #include <QThreadPool>
@@ -38,7 +40,7 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
     QCoreApplication::setLibraryPaths({plugins});
     qputenv("QT_PLUGIN_PATH",plugins.toUtf8());
     QApplication app(argc,argv);
-    app.setApplicationName("Zex");app.setOrganizationName("sixunited");app.setApplicationVersion("0.7.0.0");
+    app.setApplicationName("Zex");app.setOrganizationName("sixunited");app.setApplicationVersion("0.8.0.0");
     QThreadPool::globalInstance()->setMaxThreadCount(qMax(2,qMin(4,QThread::idealThreadCount())));
     QString reportPath,capturePath,searchText,sessionFile,verifyTheme,appearanceCapture;
     QPointer<AppearanceDialog> appearanceDialog;
@@ -158,7 +160,7 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
                 if(auto* page=window.currentPage();page && page->editor && page->editor->searchBusy())return;
                 if(auto* page=window.currentPage();page && page->followBusy())return;
                 finish->stop();
-                QJsonObject report{{"version","0.7.0.0"},{"qt",qVersion()},{"tabs",window.tabCount()},{"startup_to_ready_ms",loadedMs},{"plugin_paths",QJsonArray::fromStringList(QCoreApplication::libraryPaths())}};
+                QJsonObject report{{"version","0.8.0.0"},{"qt",qVersion()},{"tabs",window.tabCount()},{"startup_to_ready_ms",loadedMs},{"plugin_paths",QJsonArray::fromStringList(QCoreApplication::libraryPaths())}};
                 const auto available=window.screen()->availableGeometry();
                 auto rectJson=[](const QRect& r){return QJsonArray{r.x(),r.y(),r.width(),r.height()};};
                 report.insert("startup_to_shell_ms",shellReadyMs);report.insert("max_ui_gap_ms",maxUiGap);report.insert("max_ready_ui_gap_ms",maxReadyUiGap);
@@ -171,6 +173,8 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
                 report.insert("loaded_tabs",loadedTabs);
                 report.insert("pid",qint64(GetCurrentProcessId()));report.insert("single_instance",receiverName!=nullptr);
                 report.insert("theme",Theme::id());report.insert("theme_dark",Theme::colors().dark);
+                if(auto* input=window.findChild<QLineEdit*>("searchInput")){report.insert("ui_font",QFontInfo(input->font()).family());report.insert("ui_font_request",input->font().toString());}
+                if(auto* label=window.findChild<QLabel*>("status")){report.insert("ui_label_font",QFontInfo(label->font()).family());report.insert("ui_label_font_request",label->font().toString());}
                 report.insert("session",QJsonDocument::fromJson(window.sessionSnapshot().serialize()).object());
                 if(!sessionFile.isEmpty())report.insert("session_saved",window.saveSession());
                 if(auto* page=window.currentPage()) {
@@ -180,7 +184,7 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
                     report.insert("search_error",page->editor->searchError());report.insert("search_stopped",page->editor->searchStopped());report.insert("read_only",bool(page->editor->send(SCI_GETREADONLY)));
                     if(auto* list=window.findChild<QListView*>("searchResultsList"))report.insert("search_results_rows",list->model()->rowCount());
                     if(auto* bar=window.findChild<QWidget*>("searchbar");bar && bar->isVisible()){
-                        bool fits=true;for(auto* control:bar->findChildren<QWidget*>(QString(),Qt::FindDirectChildrenOnly))if(control->isVisible() && !bar->rect().contains(control->geometry()))fits=false;
+                        bool fits=true;for(auto* control:bar->findChildren<QWidget*>())if(control->isVisible() && !bar->rect().contains(QRect(control->mapTo(bar,QPoint()),control->size())))fits=false;
                         report.insert("search_controls_fit",fits);
                     }
                     report.insert("load_canceled",page->wasCanceled());

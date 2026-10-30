@@ -7,4 +7,30 @@
     <file alias="check-dark.svg">ui/check-dark.svg</file>
     <file alias="check-light.svg">ui/check-light.svg</file>
   </qresource>
+  <qresource prefix="/chrome">
+    <file alias="close.svg">ui/codicons/close.svg</file>
+    <file alias="plus.svg">ui/codicons/plus.svg</file>
+    <file alias="minimize.svg">ui/codicons/minimize.svg</file>
+    <file alias="maximize.svg">ui/codicons/maximize.svg</file>
+    <file alias="restore.svg">ui/codicons/restore.svg</file>
+    <file alias="search.svg">ui/codicons/search.svg</file>
+    <file alias="up.svg">ui/codicons/up.svg</file>
+    <file alias="down.svg">ui/codicons/down.svg</file>
+    <file alias="right.svg">ui/codicons/right.svg</file>
+    <file alias="files.svg">ui/codicons/files.svg</file>
+    <file alias="pin.svg">ui/codicons/pin.svg</file>
+    <file alias="stop.svg">ui/codicons/stop.svg</file>
+    <file alias="split.svg">ui/codicons/split.svg</file>
+    <file alias="list.svg">ui/codicons/list.svg</file>
+    <file alias="folder.svg">ui/codicons/folder.svg</file>
+    <file alias="wrap.svg">ui/codicons/wrap.svg</file>
+    <file alias="lock.svg">ui/codicons/lock.svg</file>
+    <file alias="regex.svg">ui/codicons/regex.svg</file>
+    <file alias="case.svg">ui/codicons/case.svg</file>
+    <file alias="whole.svg">ui/codicons/whole.svg</file>
+    <file alias="selection.svg">ui/codicons/selection.svg</file>
+    <file alias="settings.svg">ui/codicons/settings.svg</file>
+    <file alias="file.svg">ui/codicons/file.svg</file>
+    <file alias="follow.svg">ui/codicons/follow.svg</file>
+  </qresource>
 </RCC>

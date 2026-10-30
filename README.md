@@ -1,6 +1,6 @@
 # Zex
 
-一个专注于本地文件和代码阅读的 Windows 桌面工具。C++ + Qt 6 + Scintilla，提供接近 Zed 的简洁界面，不含项目管理。
+一个专注于本地文件和代码阅读的 Windows 桌面工具。C++ + Qt 6 + Scintilla，采用紧凑、中性深色、弱边框的界面，不含项目管理。
 
 **[下载 Windows x64 便携版](https://github.com/sclliang/Zex/releases/latest)** · [中文使用说明](USER_GUIDE.txt)
 
@@ -8,7 +8,11 @@
 
 ![Zex 文件与代码阅读界面](docs/screenshot.png)
 
-A Windows file and code viewer, built with C++20, Qt 6 Widgets, Scintilla and Lexilla. Version 0.7.0.0. Company: sixunited. Author: sclliang.
+A Windows file and code viewer, built with C++20, Qt 6 Widgets, Scintilla and Lexilla. Version 0.8.0.0. Company: sixunited. Author: sclliang.
+
+Version 0.8 refines the interface around **compact spacing, neutral Graphite colors and subtle borders**. The title-bar file picker (`Ctrl+P`), tabs, breadcrumbs, split headers and status bar share consistent sizing. Microsoft Codicons replace fixed-resolution toolbar drawings and render at the current display scale. The welcome page groups opening, switching and appearance actions alongside recent files.
+
+Search now floats inside the active pane and uses two rows in narrow panes; showing or hiding the bar alone does not resize the editor. The optional result list still occupies its own resizable panel. Default code typography uses Cascadia Mono (or Consolas), 11 pt, three pixels of line padding and upright comments. Existing custom settings are preserved; only the exact old factory preset is migrated once. The underlying file loading, lazy session restoration and read-only model are unchanged. See [0.8.0 validation](docs/validation-0.8.0.md).
 
 Version 0.7 adds **Unicode regular expressions**, fixed-selection search, a lazy result list and a Stop button. PCRE2 10.49 runs on worker threads over an immutable UTF-8 snapshot copied in 512 KiB GUI batches; workers never call Scintilla or Qt widgets. Explicit cancellation, query generations, a roughly three-second deadline and PCRE2 match/depth/heap/compile limits bound expensive expressions. Invalid expressions and resource limits appear inline. The first 10,000 matches are highlighted/listed; next/previous can search beyond that limit. Selection mode treats the selected text as a standalone subject for regex boundaries and lookarounds. Log appends invalidate regex results; Enter refreshes them. Literal append/search behavior remains incremental.
 
@@ -16,7 +20,7 @@ Version 0.7 adds **Unicode regular expressions**, fixed-selection search, a lazy
 
 **Left/right split** (`Ctrl+\`) supports independent documents, encodings, folds, selections and reading positions. Click a side before switching the shared file tabs, opening a file or searching; each pane header also provides a file picker. The right close button keeps the left view and the tab collection. Session restoration saves both visible paths, the right position/encoding, active side and width ratio; only the one or two visible views load at startup. Bookmarks and split metadata are optional additions to session version 1. No project model is introduced. See [0.7.0 validation](docs/validation-0.7.0.md).
 
-![Zex split view, bookmarks and search results](docs/reading.png)
+![Zex split view, bookmarks and search results](docs/reading-0.8.png)
 
 Version 0.6 adds **Ctrl+P** for fuzzy filename/path matching across open files and the last 50 recently used files. The picker shows icons, paths and open/pinned/recent labels, supports keyboard navigation, and performs no filesystem enumeration or document reads while filtering. The tab-strip arrow opens a searchable list of all tabs in visual order. Right-click a tab to pin it or close tabs to its right. Pinned tabs stay grouped first, preserve their relative order and survive ordinary/bulk close commands; unpin before closing. The optional `pinned` session field is backward compatible and dormant tabs remain lazy.
 
@@ -61,6 +65,8 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 
 File icons and catalogs are checked in under `assets/file-icons` and embedded into the application DLL. They are loaded lazily and rendered icons are cached. No network access or icon-font installation is required at runtime. `scripts/vendor-icons.py` imports pinned upstream sources (requires Python `requests` and `fonttools`); provenance and MIT notices are in `vendor/icon-notices`. The Seti WOFF font is converted to TTF with unchanged glyphs. Standard VS Code language associations are resolved for standalone use; unknown types use each theme's generic file icon. Icon support does not imply a syntax lexer or binary-file reader for every format.
 
+The toolbar uses 24 SVGs from [Microsoft Codicons](https://github.com/microsoft/vscode-codicons), pinned by `scripts/vendor-ui-icons.py`. The artwork is licensed under **CC BY 4.0**, with attribution, unchanged source paths, hashes and the full license in `vendor/icon-notices` and the distributed `bin/licenses/FileIcons` directory. Zex applies its theme color while rendering; it does not use the upstream MIT code license for the icon artwork.
+
 ## Distribution
 
 ```
@@ -99,8 +105,8 @@ This diagnostic mode runs the real packaged application, reports when the file i
 
 Limits: 256 MB per file; highlighting switches off above 8 MB or for lines longer than 20,000 characters. Search highlights/lists up to 10,000 matches; next/previous continues through the full document, subject to regex time/complexity limits. UTF-8 and BOM-marked UTF-16/32 are recognized, with GB18030/GBK fallback. No general-purpose encoding detector, save, replace, project management, language server, terminal, or plugin system is included.
 
-Run `python scripts/verify-performance.py --label release-0.7.0 --enforce` after building for isolated packaged tests of 100–400% effective scaling, 10/100/240 MiB files, ASCII and Unicode long lines, cancellation during decoding and document preparation, the size limit, and 100 restored tabs. This uses Python's standard library. Reports and screenshots go to the ignored `artifacts/performance/` directory. The scale override affects only the test process; Windows display settings and the normal user session are unchanged. Diagnostic reports include `startup_to_shell_ms`, `max_ui_gap_ms` (including construction/loading), `max_loading_ui_gap_ms` (after shell exposure was detected, before load completion), and `max_ready_ui_gap_ms` (after the document became ready, including search). The 16 ms heartbeat measures observed UI event-loop gaps, not guaranteed frame times. Search reports wait for counting and navigation to finish. `--verify-cancel-percent 75` exercises the real Cancel button and `--capture-loading` captures the progress UI; canceled loads report `ready: false` and exit with code 1.
+Run `python scripts/verify-performance.py --label release-0.8.0 --enforce` after building for isolated packaged tests of 100–400% effective scaling, 10/100/240 MiB files, ASCII and Unicode long lines, cancellation during decoding and document preparation, the size limit, and 100 restored tabs. This uses Python's standard library. Reports and screenshots go to the ignored `artifacts/performance/` directory. The scale override affects only the test process; Windows display settings and the normal user session are unchanged. Diagnostic reports include `startup_to_shell_ms`, `max_ui_gap_ms` (including construction/loading), `max_loading_ui_gap_ms` (after shell exposure was detected, before load completion), and `max_ready_ui_gap_ms` (after the document became ready, including search). The 16 ms heartbeat measures observed UI event-loop gaps, not guaranteed frame times. Search reports wait for counting and navigation to finish. `--verify-cancel-percent 75` exercises the real Cancel button and `--capture-loading` captures the progress UI; canceled loads report `ready: false` and exit with code 1.
 
-Run `python scripts/verify-navigation.py --label release-0.7.0` for portable navigation/follow checks: six themes, 100 lazy pinned tabs, 100–400% picker scaling, Unicode/GB18030 split writes, multi-batch append, rotation/truncation/reappearance, invalid input and source-file hashes. It uses a clean system PATH, isolated sessions and temporary fixtures. Diagnostic-only `--verify-follow`, `--verify-follow-ready`, `--verify-pin`, `--capture-picker`, `--verify-picker-query` and `--verify-all-tabs` expose the same UI for these checks; normal launches do not run them.
+Run `python scripts/verify-navigation.py --label release-0.8.0` for portable navigation/follow checks: six themes, 100 lazy pinned tabs, 100–400% picker scaling, Unicode/GB18030 split writes, multi-batch append, rotation/truncation/reappearance, invalid input and source-file hashes. It uses a clean system PATH, isolated sessions and temporary fixtures. Diagnostic-only `--verify-follow`, `--verify-follow-ready`, `--verify-pin`, `--capture-picker`, `--verify-picker-query` and `--verify-all-tabs` expose the same UI for these checks; normal launches do not run them.
 
-Run `python scripts/verify-reading.py --label release-0.7.0` to verify portable regex/selection/results, cancellation and pathological expressions, bookmarks across restarts, two independently restored views among 100 tabs, six themes and 100–400% scaling. The script uses isolated sessions, clean PATH, arbitrary working directories and source hashes. Diagnostic flags are `--verify-regex`, `--verify-results`, `--verify-scope start:end` (UTF-8 byte offsets), `--verify-bookmarks 1,44` (one-based lines), and `--verify-search-cancel-ms 80`. They are only for testing.
+Run `python scripts/verify-reading.py --label release-0.8.0` to verify portable regex/selection/results, cancellation and pathological expressions, bookmarks across restarts, two independently restored views among 100 tabs, six themes and 100–400% scaling. The script uses isolated sessions, clean PATH, arbitrary working directories and source hashes. Diagnostic flags are `--verify-regex`, `--verify-results`, `--verify-scope start:end` (UTF-8 byte offsets), `--verify-bookmarks 1,44` (one-based lines), and `--verify-search-cancel-ms 80`. They are only for testing.

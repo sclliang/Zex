@@ -32,8 +32,8 @@ CodeEditor::CodeEditor(QWidget* parent) : ScintillaEditBase(parent), colorTheme_
     send(SCI_STYLESETCHECKMONOSPACED, STYLE_DEFAULT, 1);
     send(SCI_STYLECLEARALL);
     send(SCI_SETFONTQUALITY, SC_EFF_QUALITY_LCD_OPTIMIZED);
-    send(SCI_SETEXTRAASCENT, 3);
-    send(SCI_SETEXTRADESCENT, 3);
+    send(SCI_SETEXTRAASCENT, (appearance_.linePadding+1)/2);
+    send(SCI_SETEXTRADESCENT, appearance_.linePadding/2);
     send(SCI_SETCARETFORE, rgb(Theme::colors().accent));
     send(SCI_SETCARETWIDTH, 2);
     send(SCI_SETCARETLINEVISIBLE, 1);
@@ -42,16 +42,16 @@ CodeEditor::CodeEditor(QWidget* parent) : ScintillaEditBase(parent), colorTheme_
     send(SCI_SETSELBACK, 1, rgb(Theme::colors().selection));
     send(SCI_SETSELFORE, 0, 0);
     send(SCI_SETSELEOLFILLED, 1);
-    send(SCI_SETMARGINLEFT, 0, 12);
-    send(SCI_SETMARGINRIGHT, 0, 16);
+    send(SCI_SETMARGINLEFT, 0, 6);
+    send(SCI_SETMARGINRIGHT, 0, 12);
     send(SCI_SETMARGINTYPEN, 0, SC_MARGIN_NUMBER);
     send(SCI_STYLESETFORE, STYLE_LINENUMBER, rgb(Theme::colors().subtle));
     send(SCI_STYLESETBACK, STYLE_LINENUMBER, rgb(Theme::colors().background));
     send(SCI_SETMARGINTYPEN, 1, SC_MARGIN_SYMBOL);
     send(SCI_SETMARGINMASKN, 1, SC_MASK_FOLDERS);
     send(SCI_SETMARGINSENSITIVEN, 1, 1);
-    send(SCI_SETMARGINWIDTHN, 1, 16);
-    send(SCI_SETMARGINTYPEN,2,SC_MARGIN_SYMBOL);send(SCI_SETMARGINMASKN,2,1<<1);send(SCI_SETMARGINSENSITIVEN,2,1);send(SCI_SETMARGINWIDTHN,2,14);
+    send(SCI_SETMARGINWIDTHN, 1, 12);
+    send(SCI_SETMARGINTYPEN,2,SC_MARGIN_SYMBOL);send(SCI_SETMARGINMASKN,2,1<<1);send(SCI_SETMARGINSENSITIVEN,2,1);send(SCI_SETMARGINWIDTHN,2,12);
     send(SCI_MARKERDEFINE,1,SC_MARK_BOOKMARK);send(SCI_MARKERSETFORE,1,rgb(Theme::colors().accent));send(SCI_MARKERSETBACK,1,rgb(Theme::colors().accent));
     send(SCI_SETFOLDMARGINCOLOUR, 1, rgb(Theme::colors().background));
     send(SCI_SETFOLDMARGINHICOLOUR, 1, rgb(Theme::colors().background));
@@ -217,7 +217,7 @@ void CodeEditor::restoreReadingPosition(const ReadingPosition& position) {
 
 void CodeEditor::updateMargins() {
     QByteArray digits(qMax(3, QByteArray::number(send(SCI_GETLINECOUNT)).size()), '9');
-    send(SCI_SETMARGINWIDTHN, 0, sends(SCI_TEXTWIDTH, STYLE_LINENUMBER, digits.constData()) + 22);
+    send(SCI_SETMARGINWIDTHN, 0, sends(SCI_TEXTWIDTH, STYLE_LINENUMBER, digits.constData()) + 14);
 }
 
 void CodeEditor::updateBraces() {
@@ -284,7 +284,7 @@ void CodeEditor::configureLanguage(const QString& path, bool large) {
     sends(SCI_SETKEYWORDS,1,extra.constData());
     sends(SCI_SETPROPERTY,reinterpret_cast<uptr_t>("fold"),"1");
     sends(SCI_SETPROPERTY,reinterpret_cast<uptr_t>("lexer.cpp.track.preprocessor"),"0");
-    send(SCI_SETMARGINWIDTHN,1,large || lexer=="null" ? 0 : 16);
+    send(SCI_SETMARGINWIDTHN,1,large || lexer=="null" ? 0 : 12);
     applyColors();
     applyTypography();
     send(SCI_COLOURISE,0,-1);
@@ -315,7 +315,7 @@ void CodeEditor::applyColors() {
         send(SCI_MARKERSETFORE,marker,rgb(p.muted));send(SCI_MARKERSETBACK,marker,rgb(p.background));
     }
     send(SCI_INDICSETFORE,searchIndicator,rgb(p.number));
-    send(SCI_INDICSETALPHA,searchIndicator,p.dark?55:45);
+    send(SCI_INDICSETALPHA,searchIndicator,p.dark?42:32);send(SCI_INDICSETOUTLINEALPHA,searchIndicator,40);
     commentStyles_.clear();
     auto color = [this](std::initializer_list<int> styles, const QColor& value, bool italic=false) {
         for (int s : styles) {

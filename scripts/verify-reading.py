@@ -2,7 +2,7 @@
 import argparse, hashlib, json, os, pathlib, subprocess
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--label', default='release-0.7.0')
+parser.add_argument('--label', default='release-0.8.0')
 parser.add_argument('--package', default='package')
 args = parser.parse_args()
 root = pathlib.Path(__file__).resolve().parent.parent
@@ -26,7 +26,7 @@ def run(name, extra=(), files=(), scale=None, wait=600):
     process = subprocess.run(command, cwd=fixtures, env=current_env, capture_output=True, timeout=35, creationflags=subprocess.CREATE_NO_WINDOW)
     assert process.returncode == 0 and report.exists(), (name, process.returncode, process.stderr.decode(errors='replace'))
     data = json.loads(report.read_text(encoding='utf-8'))
-    assert data['version'] == '0.7.0.0' and data['ready'] and data.get('read_only'), name
+    assert data['version'] == '0.8.0.0' and data['ready'] and data.get('read_only'), name
     data['case'] = name
     results.append(data)
     print(json.dumps({key: data.get(key) for key in ('case', 'loaded_tabs', 'startup_to_ready_ms', 'max_ready_ui_gap_ms', 'search_matches', 'search_error', 'search_stopped', 'search_controls_fit')}, ensure_ascii=False), flush=True)

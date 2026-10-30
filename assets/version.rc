@@ -1,8 +1,8 @@
 #include <windows.h>
 IDI_ICON1 ICON "zex.ico"
 1 VERSIONINFO
-FILEVERSION 0,7,0,0
-PRODUCTVERSION 0,7,0,0
+FILEVERSION 0,8,0,0
+PRODUCTVERSION 0,8,0,0
 FILEFLAGSMASK 0x3fL
 FILEFLAGS 0
 FILEOS VOS_NT_WINDOWS32
@@ -15,12 +15,12 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "sixunited\0"
       VALUE "FileDescription", "Zex File and Code Viewer\0"
-      VALUE "FileVersion", "0.7.0.0\0"
+      VALUE "FileVersion", "0.8.0.0\0"
       VALUE "InternalName", "Zex\0"
       VALUE "LegalCopyright", "Copyright (c) 2026 sixunited. Author: sclliang\0"
       VALUE "OriginalFilename", "Zex.exe\0"
       VALUE "ProductName", "Zex\0"
-      VALUE "ProductVersion", "0.7.0.0\0"
+      VALUE "ProductVersion", "0.8.0.0\0"
     END
   END
   BLOCK "VarFileInfo"

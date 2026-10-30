@@ -1,0 +1,129 @@
+{
+  "project": "Microsoft Codicons",
+  "author": "Microsoft Corporation and contributors",
+  "source": "https://github.com/microsoft/vscode-codicons",
+  "commit": "ceaa8663a7e63e2bac7f1ecac128ce31404b7487",
+  "adaptation": "Original SVG paths retained; Zex applies its theme color at render time.",
+  "icons": [
+    {
+      "name": "close",
+      "upstream": "src/icons/close.svg",
+      "sha256": "6876f88fdc070323f1f0aa9e52c5b3c8e7fa73a839b4f5544d8999c51dbbb876"
+    },
+    {
+      "name": "plus",
+      "upstream": "src/icons/add.svg",
+      "sha256": "2f67796c7a4506dbec770919ae1cf57759aa0f37a3f971edcda73b45e89c4ee0"
+    },
+    {
+      "name": "minimize",
+      "upstream": "src/icons/chrome-minimize.svg",
+      "sha256": "61970afb22ba6828f4e06ddd665dbd4cd55ed4fc05ae33815ee03c07e929c37e"
+    },
+    {
+      "name": "maximize",
+      "upstream": "src/icons/chrome-maximize.svg",
+      "sha256": "b2713506aaac02a5cf39531612d142c2752be547ae82f07167a7b07c606f6cf0"
+    },
+    {
+      "name": "restore",
+      "upstream": "src/icons/chrome-restore.svg",
+      "sha256": "451365376e95c99b512f2451d6763caea1f2ad6c82e63a710aede29b5feee294"
+    },
+    {
+      "name": "search",
+      "upstream": "src/icons/search.svg",
+      "sha256": "ea26083bb6dd49a42a1a6fe13cd9613022442a002f11c8247476c32b7eab7dfe"
+    },
+    {
+      "name": "up",
+      "upstream": "src/icons/chevron-up.svg",
+      "sha256": "f26867f525724604cc1eb0afbea90d4bea9c962db84eb07030df7bdc51115635"
+    },
+    {
+      "name": "down",
+      "upstream": "src/icons/chevron-down.svg",
+      "sha256": "d98010cf4a4a2f830da7d7686535295fe224b8d5e4c1e92fb79913329af4e47b"
+    },
+    {
+      "name": "right",
+      "upstream": "src/icons/chevron-right.svg",
+      "sha256": "f57be224b89aab6a03908b726ffa643f32e6709119b780eba486005180772bf2"
+    },
+    {
+      "name": "files",
+      "upstream": "src/icons/files.svg",
+      "sha256": "0dd44db0b3d654216ab9ac7130e55dc9113bffad4d8debfdb25f80e556d9f1e6"
+    },
+    {
+      "name": "pin",
+      "upstream": "src/icons/pin.svg",
+      "sha256": "6b8922453c82aa18eaf5b79f61e60e0fc3152d8d79500d7a7fdd4dbd36700556"
+    },
+    {
+      "name": "stop",
+      "upstream": "src/icons/debug-stop.svg",
+      "sha256": "bab0947264a027339a6288f95c3bbb6a6d270b92790e30827e778f4c3268cd37"
+    },
+    {
+      "name": "split",
+      "upstream": "src/icons/split-horizontal.svg",
+      "sha256": "329ac127b76c970e283e8c573b71e6cafd8f555c9198d9b41ab2cb99ad88d9bc"
+    },
+    {
+      "name": "list",
+      "upstream": "src/icons/list-flat.svg",
+      "sha256": "e9ea963de6c549dca85d1c52fdfe77c10787b7a8c18d9e77fe67c26a19f91e94"
+    },
+    {
+      "name": "folder",
+      "upstream": "src/icons/folder-opened.svg",
+      "sha256": "9e57f643bf6660c31f5bcc057e4933c44ec7367a814c5074285d8d2ae1092ec8"
+    },
+    {
+      "name": "wrap",
+      "upstream": "src/icons/word-wrap.svg",
+      "sha256": "00e7fe55f15a814cb0682964d5a984cddf5b8e6ceaaee0ef5161c5ffe357747b"
+    },
+    {
+      "name": "lock",
+      "upstream": "src/icons/lock.svg",
+      "sha256": "5b7402cb3390ed71d57a3a08951fbb23ad1a3b2e3d579c455a47cffab215f264"
+    },
+    {
+      "name": "regex",
+      "upstream": "src/icons/regex.svg",
+      "sha256": "9ec9321acbb7b819098e7cdbeaac2a80e2c066d548fa43c6f7669e272a2b65e1"
+    },
+    {
+      "name": "case",
+      "upstream": "src/icons/case-sensitive.svg",
+      "sha256": "225563c388617c52418b1b1b73aca3d0ac0e8e3906ac55dee697d4c08fb062f0"
+    },
+    {
+      "name": "whole",
+      "upstream": "src/icons/whole-word.svg",
+      "sha256": "3a52386c2cc1d5c8f299513d4a18c0a4ce2c5feb109d0bf2561a0df43920fc55"
+    },
+    {
+      "name": "selection",
+      "upstream": "src/icons/list-selection.svg",
+      "sha256": "0abb351f050d7a372bfc04d129a031d39720a6153a82e825155a7834aea8be3c"
+    },
+    {
+      "name": "settings",
+      "upstream": "src/icons/settings-gear.svg",
+      "sha256": "fc7d0ccb2d7a74e74e37ce1ba833e31fef326f9e07ce5f74bc17acb64c087669"
+    },
+    {
+      "name": "file",
+      "upstream": "src/icons/file.svg",
+      "sha256": "8d85e1e13c99e0b303442631ec01238b1aeb64a4e9e3a2949f12a60f0def71ae"
+    },
+    {
+      "name": "follow",
+      "upstream": "src/icons/eye.svg",
+      "sha256": "8f935a93b507315b8d5e851f68b88f0a72829b797d59f5993ffa449cd8489b4b"
+    }
+  ]
+}

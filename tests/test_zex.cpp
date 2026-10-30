@@ -13,6 +13,8 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QFontComboBox>
+#include <QFontDatabase>
+#include <QFontInfo>
 #include <QLineEdit>
 #include <QListView>
 #include <QLayout>
@@ -21,6 +23,7 @@
 #include <QJsonObject>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QSplitter>
 #include <QScreen>
 #include <QSaveFile>
 #include <QProgressBar>
@@ -44,6 +47,45 @@ struct RegistrySandbox {
 class ZexTests : public QObject {
     Q_OBJECT
 private slots:
+    void legacyTypographyMigrationPreservesCustomSettings() {
+        QTemporaryDir directory;QSettings settings(directory.filePath("appearance.ini"),QSettings::IniFormat);
+        const auto defaults=EditorAppearance::defaults();QVERIFY(EditorAppearance::fromSettings(settings)==defaults);
+        auto legacy=defaults;for(auto family:{"Cascadia Code","Cascadia Mono","Consolas"})if(QFontDatabase::families().contains(QLatin1String(family))){legacy.family=family;break;}
+        legacy.points=12;legacy.linePadding=6;legacy.commentItalics=true;
+        legacy.save(settings);settings.remove("editor/typographyVersion");
+        QVERIFY(EditorAppearance::fromSettings(settings)==defaults);
+        settings.setValue("editor/fontSize",17);auto custom=legacy;custom.points=17;
+        QVERIFY(EditorAppearance::fromSettings(settings)==custom);
+        settings.setValue("editor/fontSize",12);settings.setValue("editor/bold",true);custom=legacy;custom.bold=true;
+        QVERIFY(EditorAppearance::fromSettings(settings)==custom);
+        legacy.save(settings);QVERIFY(EditorAppearance::fromSettings(settings)==legacy);
+    }
+    void chromeIconsRenderAtEveryScale() {
+        for(const auto* name:{"close","search","split","case","regex","selection","folder","zex"}) {
+            const auto icon=Theme::icon(name,QColor("#a0a0a0"));QVERIFY(!icon.isNull());
+            for(qreal scale:{1.0,1.25,1.5,2.0,3.0,4.0}) {
+                const auto pix=icon.pixmap(QSize(16,16),scale);QCOMPARE(pix.size(),QSize(qRound(16*scale),qRound(16*scale)));QCOMPARE(pix.devicePixelRatioF(),scale);
+                const auto normal=pix.toImage(),disabled=icon.pixmap(QSize(16,16),scale,QIcon::Disabled).toImage();
+                qint64 alpha=0,dimAlpha=0;for(int y=0;y<normal.height();++y)for(int x=0;x<normal.width();++x){alpha+=qAlpha(normal.pixel(x,y));dimAlpha+=qAlpha(disabled.pixel(x,y));}
+                QVERIFY(alpha>1000);QVERIFY(dimAlpha>0 && dimAlpha<alpha/2);
+            }
+        }
+    }
+    void floatingSearchPreservesViewportAndFitsActivePane() {
+        QTemporaryDir directory;QFile file(directory.filePath("reading.txt"));QVERIFY(file.open(QIODevice::WriteOnly));file.write(QByteArray("line with enough columns to read\n").repeated(350));file.close();
+        MainWindow window(true);window.resize(940,650);window.show();QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto* page=window.openPath(file.fileName());QTRY_VERIFY(page->ready);page->editor->restoreReadingPosition({90,0,0,95,3,95,3});
+        const auto position=page->readingPosition();const auto viewport=page->editor->size();window.showSearch();QCoreApplication::processEvents();
+        auto* bar=window.findChild<QWidget*>("searchbar");QVERIFY(bar && bar->isVisible());QCOMPARE(page->editor->size(),viewport);QVERIFY(page->readingPosition()==position);
+        auto fits=[&]{for(auto* child:bar->findChildren<QWidget*>())if(child->isVisible() && !bar->rect().contains(QRect(child->mapTo(bar,QPoint()),child->size())))return false;return true;};
+        QVERIFY(fits());window.hideSearch();QCoreApplication::processEvents();QCOMPARE(page->editor->size(),viewport);QVERIFY(page->readingPosition()==position);
+        window.setSplitEnabled(true);QTRY_VERIFY(window.allLoaded());window.showSearch();QCoreApplication::processEvents();QVERIFY(fits());
+        auto withinActive=[&]{auto* pane=window.currentPage()->parentWidget();while(pane->parentWidget()!=bar->parentWidget()->findChild<QSplitter*>("editorPanes"))pane=pane->parentWidget();return QRect(pane->mapTo(bar->parentWidget(),QPoint()),pane->size()).contains(bar->geometry());};
+        QVERIFY(withinActive());window.primaryPage()->editor->setFocus();QTRY_COMPARE(window.currentPage(),window.primaryPage());QVERIFY(withinActive());
+        auto* splitter=window.findChild<QSplitter*>("editorPanes");splitter->setSizes({260,680});QMetaObject::invokeMethod(splitter,"splitterMoved",Q_ARG(int,260),Q_ARG(int,1));QCoreApplication::processEvents();
+        QVERIFY(withinActive());QVERIFY(fits());auto* cancel=window.findChild<QToolButton*>("cancelSearch");cancel->show();QCoreApplication::processEvents();QVERIFY(fits());
+        window.resize(820,600);QCoreApplication::processEvents();QVERIFY(withinActive());QVERIFY(fits());window.hideSearch();window.close();
+    }
     void bookmarksNavigationAndReload() {
         CodeEditor editor;editor.resize(850,500);editor.show();QVERIFY(QTest::qWaitForWindowExposed(&editor));
         editor.setContent(decodeFile(QByteArray("line\n").repeated(150)),"notes.txt");
@@ -646,7 +688,7 @@ private slots:
         connect(&dialog,&AppearanceDialog::applyRequested,&window,[&]{window.applyAppearance(dialog.editorAppearance(),dialog.iconTheme());});
         auto* size=dialog.findChild<QSpinBox*>("fontSize");auto* icons=dialog.findChild<QComboBox*>("iconTheme");
         QVERIFY(size);QVERIFY(icons);size->setValue(18);icons->setCurrentIndex(icons->findData("seti-mono"));
-        QCOMPARE(page->editor->pointSize(),12); // Preview is isolated until Apply / OK.
+        QCOMPARE(page->editor->pointSize(),EditorAppearance::defaults().points); // Preview is isolated until Apply / OK.
         QTest::mouseClick(dialog.findChild<QPushButton*>("appearanceApply"),Qt::LeftButton);
         QCOMPARE(page->editor->pointSize(),18);QCOMPARE(FileIcons::theme(),QString("seti-mono"));
         size->setValue(22);QTest::mouseClick(dialog.findChild<QPushButton*>("appearanceCancel"),Qt::LeftButton);

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(Zex VERSION 0.7.0.0 LANGUAGES C CXX RC)
+project(Zex VERSION 0.8.0.0 LANGUAGES C CXX RC)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -36,7 +36,7 @@ target_include_directories(lexilla PUBLIC vendor/lexilla/include PRIVATE vendor/
 target_compile_definitions(lexilla PRIVATE LEXILLA_NO_EXPORT)
 
 add_library(zex_core STATIC src/fileloader.cpp src/documentloader.cpp src/logreader.cpp src/filepagefollow.cpp src/editor.cpp src/regexsearch.cpp src/editorsearch.cpp src/theme.cpp src/mainwindow.cpp
-  src/splitview.cpp src/fileicons.cpp src/filepicker.cpp src/appearance.cpp src/appearancedialog.cpp src/session.cpp src/filereceiver.cpp src/shellintegration.cpp src/integrationdialog.cpp src/windowplacement.cpp assets/file_icons.qrc assets/ui_resources.qrc)
+  src/chromeicons.cpp src/welcomepage.cpp src/splitview.cpp src/fileicons.cpp src/filepicker.cpp src/appearance.cpp src/appearancedialog.cpp src/session.cpp src/filereceiver.cpp src/shellintegration.cpp src/integrationdialog.cpp src/windowplacement.cpp assets/file_icons.qrc assets/ui_resources.qrc)
 target_include_directories(zex_core PUBLIC src)
 target_link_libraries(zex_core PUBLIC scintilla lexilla pcre2-8-static Qt6::Concurrent Qt6::Svg dwmapi advapi32 shell32)
 target_compile_definitions(zex_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
