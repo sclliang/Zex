@@ -2,7 +2,7 @@
 import argparse, hashlib, json, os, pathlib, subprocess, time
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--label', default='release-0.6.0')
+parser.add_argument('--label', default='release-0.7.0')
 parser.add_argument('--package', default='package')
 args = parser.parse_args()
 root = pathlib.Path(__file__).resolve().parent.parent
@@ -30,7 +30,7 @@ def finish(name, process, report):
     out, err = process.communicate(timeout=35)
     assert process.returncode == 0 and report.exists(), (name, process.returncode, err.decode(errors='replace'))
     data = json.loads(report.read_text(encoding='utf-8'))
-    assert data['version'] == '0.6.0.0' and data['ready'], name
+    assert data['version'] == '0.7.0.0' and data['ready'], name
     data['case'] = name
     results.append(data)
     print(json.dumps({key: data.get(key) for key in ('case', 'tabs', 'loaded_tabs', 'startup_to_ready_ms', 'max_ready_ui_gap_ms', 'picker_matches', 'picker_fits', 'following', 'follow_notice')}, ensure_ascii=False), flush=True)

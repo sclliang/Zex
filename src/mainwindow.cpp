@@ -3,6 +3,7 @@
 #include "appearancedialog.h"
 #include "fileicons.h"
 #include "filepicker.h"
+#include "searchresults.h"
 #include "integrationdialog.h"
 #include "windowplacement.h"
 #include <QtConcurrentRun>
@@ -19,6 +20,7 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListView>
 #include <QLocale>
 #include <QMenu>
 #include <QMessageBox>
@@ -30,7 +32,9 @@
 #include <QScrollArea>
 #include <QShortcut>
 #include <QSignalBlocker>
+#include <QScopedValueRollback>
 #include <QStackedWidget>
+#include <QSplitter>
 #include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -100,6 +104,7 @@ void FilePage::ensureEditor() {
     if (editor) return;
     editor = new CodeEditor; editor->setAppearance(appearance_); editor->setWordWrap(wrap_); stack_->addWidget(editor);
     connect(editor,&CodeEditor::verticalPositionChanged,this,&FilePage::trackFollowPosition);
+    connect(editor,&CodeEditor::bookmarksChanged,this,[this]{bookmarks_=editor->bookmarks();emit bookmarksChanged();});
     emit editorCreated();
 }
 void FilePage::setAppearance(const EditorAppearance& appearance) { appearance_=appearance; if(editor)editor->setAppearance(appearance); }
@@ -109,6 +114,8 @@ void FilePage::setEncoding(const QString& encoding) {
     if(loading)cancelLoad();encoding_=next;if(attempted)reload();
 }
 void FilePage::setReadingPosition(const ReadingPosition& position) { pendingPosition_=position; }
+QVector<qint64> FilePage::bookmarks() const {return ready && editor?editor->bookmarks():bookmarks_;}
+void FilePage::setBookmarks(const QVector<qint64>& lines){const auto previous=bookmarks();bookmarks_=lines;if(ready && editor){const QSignalBlocker blocker(editor);editor->setBookmarks(lines);bookmarks_=editor->bookmarks();}if(previous!=bookmarks_)emit bookmarksChanged();}
 ReadingPosition FilePage::readingPosition() const {
     if(pendingPosition_)return *pendingPosition_;
     return ready && editor ? editor->readingPosition() : ReadingPosition{};
@@ -146,6 +153,7 @@ void FilePage::reload() {
         if (content.error.isEmpty()) {
             committing_=true;cancel_->setEnabled(false);editor->setPreparedContent(prepared,path);
             stack_->setCurrentWidget(editor); ready = true; stale = false;loadedEncoding_=encoding;
+            {const auto previous=bookmarks_;editor->setBookmarks(bookmarks_);bookmarks_=editor->bookmarks();if(previous!=bookmarks_)emit bookmarksChanged();}
             // Wait for the visible editor's layout before translating document lines to wrapped lines.
             QTimer::singleShot(0,this,[this,encoding,generation]{
                 if(generation!=loadGeneration_)return;
@@ -224,6 +232,7 @@ MainWindow::MainWindow(bool testMode, const QString& sessionFile) : settings_("s
     auto* open=tool(strip,"plus",QStringLiteral("打开文件 (Ctrl+O)")); stripLayout->addWidget(open);
     auto* find=tool(strip,"search",QStringLiteral("搜索 (Ctrl+F)")); stripLayout->addWidget(find);
     auto* switchFile=tool(strip,"files",QStringLiteral("快速切换文件 (Ctrl+P)"));stripLayout->addWidget(switchFile);
+    splitButton_=tool(strip,"split",QStringLiteral("左右分屏 (Ctrl+\\)"));splitButton_->setObjectName("splitButton");splitButton_->setCheckable(true);stripLayout->addWidget(splitButton_);connect(splitButton_,&QToolButton::toggled,this,[this](bool on){setSplitEnabled(on);});
     connect(switchFile,&QToolButton::clicked,this,[this]{showFilePicker();});
     root->addWidget(strip);
     connect(open,&QToolButton::clicked,this,&MainWindow::openFiles);
@@ -267,30 +276,37 @@ MainWindow::MainWindow(bool testMode, const QString& sessionFile) : settings_("s
     searchbar_=new QWidget; searchbar_->setObjectName("searchbar"); searchbar_->setFixedHeight(49);
     auto* searchLayout=new QHBoxLayout(searchbar_); searchLayout->setContentsMargins(14,7,10,7); searchLayout->setSpacing(7);
     auto* searchGlyph=glyphLabel("search");searchLayout->addWidget(searchGlyph);
-    search_=new QLineEdit; search_->setObjectName("searchInput"); search_->setAccessibleName(QStringLiteral("搜索关键词"));
+    search_=new QLineEdit; search_->setObjectName("searchInput"); search_->setAccessibleName(QStringLiteral("搜索关键词"));search_->setMaxLength(4096);
     search_->setPlaceholderText(QStringLiteral("在当前文件中搜索")); search_->setClearButtonEnabled(true); search_->installEventFilter(this);
     searchLayout->addWidget(search_,1);
     case_=new QToolButton; case_->setText("Aa"); case_->setCheckable(true); case_->setFixedSize(30,28); case_->setToolTip(QStringLiteral("区分大小写")); case_->setAccessibleName(QStringLiteral("区分大小写"));
     whole_=new QToolButton; whole_->setText("ab"); whole_->setCheckable(true); whole_->setFixedSize(30,28); whole_->setToolTip(QStringLiteral("全字匹配")); whole_->setAccessibleName(QStringLiteral("全字匹配"));
     searchLayout->addWidget(case_); searchLayout->addWidget(whole_);
+    regexButton_=new QToolButton;regexButton_->setObjectName("regexSearch");regexButton_->setText(".*");regexButton_->setCheckable(true);regexButton_->setToolTip(QStringLiteral("正则表达式"));regexButton_->setAccessibleName(regexButton_->toolTip());searchLayout->addWidget(regexButton_);
+    selectionButton_=new QToolButton;selectionButton_->setObjectName("selectionSearch");selectionButton_->setText(QStringLiteral("选区"));selectionButton_->setCheckable(true);selectionButton_->setToolTip(QStringLiteral("仅搜索当前选区，范围保持不变"));selectionButton_->setAccessibleName(selectionButton_->toolTip());searchLayout->addWidget(selectionButton_);
+    resultsButton_=tool(searchbar_,"list",QStringLiteral("匹配结果列表"));resultsButton_->setObjectName("searchResultsButton");resultsButton_->setCheckable(true);searchLayout->addWidget(resultsButton_);
+    cancelSearch_=tool(searchbar_,"stop",QStringLiteral("取消搜索"));cancelSearch_->setObjectName("cancelSearch");searchLayout->addWidget(cancelSearch_);
     count_=label(QStringLiteral("输入关键词")); count_->setMinimumWidth(105); count_->setAlignment(Qt::AlignCenter); searchLayout->addWidget(count_);
     auto* previous=tool(searchbar_,"up",QStringLiteral("上一个 (Shift+Enter)")); auto* next=tool(searchbar_,"down",QStringLiteral("下一个 (Enter)"));
     auto* closeFind=tool(searchbar_,"close",QStringLiteral("关闭搜索 (Esc)")); searchLayout->addWidget(previous); searchLayout->addWidget(next); searchLayout->addWidget(closeFind);
     root->addWidget(searchbar_); searchbar_->hide();
     searchDebounce_.setSingleShot(true); searchDebounce_.setInterval(110);
-    connect(&searchDebounce_,&QTimer::timeout,this,&MainWindow::runSearch);
+    connect(&searchDebounce_,&QTimer::timeout,this,[this]{runSearch();});
     connect(search_,&QLineEdit::textChanged,this,[this]{searchDebounce_.start();});
-    connect(case_,&QToolButton::toggled,this,&MainWindow::runSearch); connect(whole_,&QToolButton::toggled,this,&MainWindow::runSearch);
-    connect(search_,&QLineEdit::returnPressed,this,[this]{if(searchDebounce_.isActive()){runSearch();return;} if(auto* p=currentPage();p&&p->ready)p->editor->findNext();});
+    connect(case_,&QToolButton::toggled,this,[this]{runSearch();});connect(whole_,&QToolButton::toggled,this,[this]{runSearch();});connect(regexButton_,&QToolButton::toggled,this,[this]{runSearch();});
+    connect(selectionButton_,&QToolButton::toggled,this,&MainWindow::setSelectionSearch);connect(resultsButton_,&QToolButton::toggled,this,&MainWindow::showSearchResults);
+    connect(cancelSearch_,&QToolButton::clicked,this,[this]{searchDebounce_.stop();if(auto* p=currentPage();p && p->editor)p->editor->cancelSearch();});
+    connect(search_,&QLineEdit::returnPressed,this,[this]{if(searchDebounce_.isActive()){runSearch();return;} if(auto* p=currentPage();p&&p->ready){if(p->editor->searchStopped())runSearch();else p->editor->findNext();}});
     connect(previous,&QToolButton::clicked,this,[this]{if(auto* p=currentPage();p&&p->ready)p->editor->findNext(true);});
     connect(next,&QToolButton::clicked,this,[this]{if(auto* p=currentPage();p&&p->ready)p->editor->findNext();});
     connect(closeFind,&QToolButton::clicked,this,&MainWindow::hideSearch);
 
-    pages_=new QStackedWidget; welcome_=buildWelcome(); pages_->addWidget(welcome_); root->addWidget(pages_,1);
+    contentSplit_=new QSplitter(Qt::Vertical);contentSplit_->setChildrenCollapsible(false);initializePanes();contentSplit_->addWidget(paneSplit_);root->addWidget(contentSplit_,1);
+    welcome_=buildWelcome();pages_->addWidget(welcome_);
     auto* status=new QWidget; status->setObjectName("statusbar"); status->setFixedHeight(28);
     auto* statusLayout=new QHBoxLayout(status); statusLayout->setContentsMargins(10,0,9,0); statusLayout->setSpacing(4);
     auto* lock=glyphLabel("lock","muted",14);statusLayout->addWidget(lock);
-    statusLayout->addWidget(label(QStringLiteral("只读"),"status")); fileInfo_=label("Zex 0.6.0","status"); statusLayout->addWidget(fileInfo_);
+    statusLayout->addWidget(label(QStringLiteral("只读"),"status")); fileInfo_=label("Zex 0.7.0","status"); statusLayout->addWidget(fileInfo_);
     encodingButton_=new QToolButton;encodingButton_->setObjectName("encodingButton");encodingButton_->setPopupMode(QToolButton::InstantPopup);encodingButton_->setMenu(encodingMenu_);encodingButton_->setAccessibleName(QStringLiteral("文件编码"));statusLayout->addWidget(encodingButton_);
     sessionNotice_=label(QStringLiteral("会话未保存"),"sessionNotice");sessionNotice_->hide();statusLayout->addWidget(sessionNotice_);
     statusLayout->addStretch(); position_=label({},"status"); language_=label({},"status"); statusLayout->addWidget(position_); statusLayout->addWidget(language_);
@@ -300,6 +316,10 @@ MainWindow::MainWindow(bool testMode, const QString& sessionFile) : settings_("s
 
     auto shortcut=[this](const QKeySequence& key, auto action){auto* s=new QShortcut(key,this);connect(s,&QShortcut::activated,this,action);};
     shortcut(QKeySequence("Ctrl+P"),[this]{showFilePicker();});
+    shortcut(QKeySequence("Ctrl+\\"),[this]{setSplitEnabled(!splitEnabled());});
+    shortcut(QKeySequence("Ctrl+F2"),[this]{if(auto* p=currentPage();p && p->ready)p->editor->toggleBookmark();});
+    shortcut(QKeySequence("F2"),[this]{if(auto* p=currentPage();p && p->ready)p->editor->nextBookmark();});
+    shortcut(QKeySequence("Shift+F2"),[this]{if(auto* p=currentPage();p && p->ready)p->editor->nextBookmark(true);});
     shortcut(QKeySequence::Open,[this]{openFiles();});
     shortcut(QKeySequence::Find,[this]{showSearch();});
     shortcut(QKeySequence("Ctrl+W"),[this]{closeTab(tabs_->currentIndex());});
@@ -319,7 +339,7 @@ MainWindow::MainWindow(bool testMode, const QString& sessionFile) : settings_("s
     shortcut(QKeySequence("Escape"),[this]{hideSearch();});
     for(int i=1;i<=9;++i) shortcut(QKeySequence(QString("Alt+%1").arg(i)),[this,i]{if(tabs_->count())tabs_->setCurrentIndex(qMin(i-1,tabs_->count()-1));});
     connect(&fileWatcher_,&QFileSystemWatcher::fileChanged,this,[this](const QString& path){
-        for(int i=0;i<tabs_->count();++i) if(auto* p=pageAt(i);p && p->path==path && !p->following()){p->stale=true;if(p==currentPage())refreshStatus();}
+        for(auto* p:findChildren<FilePage*>())if(p->path==path && !p->following()){p->stale=true;if(p==currentPage())refreshStatus();}
     });
     if(!testMode && settings_.contains("geometry")) {
         restoreGeometry(settings_.value("geometry").toByteArray());
@@ -366,8 +386,14 @@ void MainWindow::buildMenus(QToolButton* file, QToolButton* view, QToolButton* h
     files->addAction(QStringLiteral("恢复关闭的标签\tCtrl+Shift+T"),this,&MainWindow::reopenClosed);
     files->addSeparator();files->addAction(QStringLiteral("退出"),this,&QWidget::close);
     auto* views=new QMenu(this);view->setMenu(views);
+    splitAction_=views->addAction(QStringLiteral("左右分屏\tCtrl+\\"));splitAction_->setCheckable(true);connect(splitAction_,&QAction::toggled,this,[this](bool on){setSplitEnabled(on);});
     views->addAction(QStringLiteral("搜索…\tCtrl+F"),this,&MainWindow::showSearch);
     views->addAction(QStringLiteral("跳转到行…\tCtrl+G"),this,&MainWindow::jumpToLine);views->addSeparator();
+    auto* bookmarks=views->addMenu(QStringLiteral("书签"));
+    bookmarks->addAction(QStringLiteral("添加 / 取消书签\tCtrl+F2"),this,[this]{if(auto* p=currentPage();p && p->ready)p->editor->toggleBookmark();});
+    bookmarks->addAction(QStringLiteral("下一个书签\tF2"),this,[this]{if(auto* p=currentPage();p && p->ready)p->editor->nextBookmark();});
+    bookmarks->addAction(QStringLiteral("上一个书签\tShift+F2"),this,[this]{if(auto* p=currentPage();p && p->ready)p->editor->nextBookmark(true);});
+    bookmarks->addSeparator();bookmarks->addAction(QStringLiteral("清除当前文件书签"),this,[this]{if(auto* p=currentPage())p->setBookmarks({});});
     wrapAction_=views->addAction(QStringLiteral("自动换行\tAlt+Z"));wrapAction_->setCheckable(true);wrapAction_->setChecked(wrap_);connect(wrapAction_,&QAction::toggled,this,&MainWindow::setWrap);
     followAction_=views->addAction(QStringLiteral("跟随文件"));followAction_->setCheckable(true);connect(followAction_,&QAction::toggled,this,[this](bool on){if(auto* page=currentPage())page->setFollowing(on);});
     views->addAction(QStringLiteral("放大字体\tCtrl++"),this,[this]{changeFont(1);});
@@ -377,8 +403,8 @@ void MainWindow::buildMenus(QToolButton* file, QToolButton* view, QToolButton* h
     views->addAction(QStringLiteral("外观设置…\tCtrl+,"),this,&MainWindow::showAppearanceSettings);
     views->addAction(QStringLiteral("Windows 集成…"),this,[this]{IntegrationDialog dialog(ShellIntegration(QCoreApplication::applicationFilePath()),this);dialog.exec();});
     auto* helps=new QMenu(this);help->setMenu(helps);
-    helps->addAction(QStringLiteral("快捷键"),this,[this]{QMessageBox::information(this,QStringLiteral("Zex · 快捷键"),QStringLiteral("Ctrl+O    打开一个或多个文件\nCtrl+P    快速切换文件\nCtrl+F    搜索当前文件\nEnter / Shift+Enter    下一个 / 上一个结果\nF3 / Shift+F3    下一个 / 上一个结果\nEsc    关闭搜索\nCtrl+G    跳转到行\nCtrl+W / 鼠标中键    关闭标签\nCtrl+Shift+T    恢复标签\nCtrl+Tab / Ctrl+Shift+Tab    切换标签\nAlt+1 … Alt+9    切换到指定标签\nAlt+Z    自动换行\nCtrl++ / Ctrl+- / Ctrl+0    调整字号\nCtrl+,    外观设置\nF5    重新载入文件\n\n支持拖入文件、拖动标签排序；右键标签可固定、关闭右侧。固定标签需先取消固定才能关闭。"));});
-    helps->addAction(QStringLiteral("关于 Zex"),this,[this]{QMessageBox::about(this,QStringLiteral("关于 Zex"),QStringLiteral("<h2>Zex <small>0.6.0</small></h2><p>专注于文件与代码的桌面阅读器。</p><p>C++ · Qt 6 · Scintilla · Lexilla</p><p>Copyright (c) 2026 sixunited.<br>Author: sclliang</p><p>本版本支持只读查看，不会修改打开的文件。<br>开源组件许可位于 bin/licenses。</p>"));});
+    helps->addAction(QStringLiteral("快捷键"),this,[this]{QMessageBox::information(this,QStringLiteral("Zex · 快捷键"),QStringLiteral("Ctrl+O    打开一个或多个文件\nCtrl+P    快速切换文件\nCtrl+\\    左右分屏\nCtrl+F2    添加 / 取消行书签\nF2 / Shift+F2    下一个 / 上一个书签\nCtrl+F    搜索当前文件\nEnter / Shift+Enter    下一个 / 上一个结果\nF3 / Shift+F3    下一个 / 上一个结果\nEsc    关闭搜索\nCtrl+G    跳转到行\nCtrl+W / 鼠标中键    关闭标签\nCtrl+Shift+T    恢复标签\nCtrl+Tab / Ctrl+Shift+Tab    切换标签\nAlt+1 … Alt+9    切换到指定标签\nAlt+Z    自动换行\nCtrl++ / Ctrl+- / Ctrl+0    调整字号\nCtrl+,    外观设置\nF5    重新载入文件\n\n支持拖入文件、拖动标签排序；右键标签可固定、关闭右侧。固定标签需先取消固定才能关闭。"));});
+    helps->addAction(QStringLiteral("关于 Zex"),this,[this]{QMessageBox::about(this,QStringLiteral("关于 Zex"),QStringLiteral("<h2>Zex <small>0.7.0</small></h2><p>专注于文件与代码的桌面阅读器。</p><p>C++ · Qt 6 · Scintilla · Lexilla</p><p>Copyright (c) 2026 sixunited.<br>Author: sclliang</p><p>本版本支持只读查看，不会修改打开的文件。<br>开源组件许可位于 bin/licenses。</p>"));});
 }
 
 QWidget* MainWindow::buildWelcome() {
@@ -406,9 +432,10 @@ FilePage* MainWindow::pageAt(int index) const {
     if(index<0 || index>=tabs_->count())return nullptr;
     return qobject_cast<FilePage*>(tabs_->tabData(index).value<QObject*>());
 }
-FilePage* MainWindow::currentPage() const {return pageAt(tabs_->currentIndex());}
+FilePage* MainWindow::primaryPage() const {return pages_?qobject_cast<FilePage*>(pages_->currentWidget()):nullptr;}
+FilePage* MainWindow::currentPage() const {return rightActive_ && secondaryPage_?secondaryPage_.data():primaryPage();}
 int MainWindow::tabCount() const {return tabs_->count();}
-bool MainWindow::allLoaded() const {for(int i=0;i<tabs_->count();++i)if(auto* p=pageAt(i);p&&p->loading)return false;return true;}
+bool MainWindow::allLoaded() const {for(int i=0;i<tabs_->count();++i)if(auto* p=pageAt(i);p&&p->loading)return false;return !secondaryPage_ || !secondaryPage_->loading;}
 
 FilePage* MainWindow::addPage(const QString& path, const ReadingPosition& position,const QString& encoding,bool pinned) {
     auto* page=new FilePage(path,pages_);page->setAppearance(appearance_);page->setWordWrap(wrap_);page->setReadingPosition(position);pages_->addWidget(page);
@@ -418,12 +445,15 @@ FilePage* MainWindow::addPage(const QString& path, const ReadingPosition& positi
     const QSignalBlocker blocker(tabs_);
     int index=tabs_->addTab(Theme::fileIcon(path),QFileInfo(path).fileName());
     tabs_->setTabData(index,QVariant::fromValue(static_cast<QObject*>(page)));tabs_->setTabToolTip(index,QDir::toNativeSeparators(path));
+    connectPage(page);return page;
+}
+void MainWindow::connectPage(FilePage* page) {
     connect(page,&FilePage::loaded,this,[this,page]{
         if(page->ready) {
             if(!fileWatcher_.files().contains(page->path))fileWatcher_.addPath(page->path);
             recent_.removeAll(page->path);recent_.prepend(page->path);recent_=recent_.mid(0,50);
         }
-        if(page==currentPage()){refreshStatus();if(searchbar_->isVisible()){const auto position=page->readingPosition();runSearch();if(page->ready)page->editor->restoreReadingPosition(position);updateSearchLabel();}}
+        if(page==currentPage()){refreshStatus();if(searchbar_->isVisible()){runSearch(false);updateSearchLabel();}}
         scheduleSessionSave();
         emit fileReady(page->path);
     });
@@ -431,17 +461,21 @@ FilePage* MainWindow::addPage(const QString& path, const ReadingPosition& positi
         connect(page->editor,&CodeEditor::positionChanged,this,[this,page]{if(page==currentPage())refreshStatus();});
         connect(page->editor,&CodeEditor::readingPositionChanged,this,&MainWindow::scheduleSessionSave);
         connect(page->editor,&CodeEditor::searchChanged,this,[this,page]{if(page==currentPage())updateSearchLabel();});
-        connect(page->editor,&CodeEditor::fileDropped,this,[this](const QString& p){openPath(p);});
+        connect(page->editor,&CodeEditor::fileDropped,this,[this,page](const QString& p){activatePane(page==secondaryPage_,false);openPath(p);});
     });
     connect(page,&FilePage::loadingChanged,this,[this,page]{if(page==currentPage())refreshStatus();scheduleSessionSave();});
     connect(page,&FilePage::followingChanged,this,[this,page]{if(page==currentPage())refreshStatus();scheduleSessionSave();});
-    return page;
+    connect(page,&FilePage::bookmarksChanged,this,[this,page]{
+        if(syncingBookmarks_)return;QScopedValueRollback guard(syncingBookmarks_,true);
+        for(auto* other:findChildren<FilePage*>())if(other!=page && other->path.compare(page->path,Qt::CaseInsensitive)==0)other->setBookmarks(page->bookmarks());
+        scheduleSessionSave();
+    });
 }
 
 FilePage* MainWindow::openPath(const QString& value) {
     const auto path=normalized(value);
-    for(int i=0;i<tabs_->count();++i)if(auto* p=pageAt(i);p&&p->path.compare(path,Qt::CaseInsensitive)==0){tabs_->setCurrentIndex(i);selectTab(i);return p;}
-    auto* page=addPage(path);const int index=tabs_->count()-1;tabs_->setCurrentIndex(index);selectTab(index);return page;
+    for(int i=0;i<tabs_->count();++i)if(auto* p=pageAt(i);p&&p->path.compare(path,Qt::CaseInsensitive)==0){tabs_->setCurrentIndex(i);selectTab(i);return currentPage();}
+    addPage(path);const int index=tabs_->count()-1;tabs_->setCurrentIndex(index);selectTab(index);return currentPage();
 }
 
 void MainWindow::openPaths(const QStringList& paths) {
@@ -469,7 +503,7 @@ void MainWindow::restoreLastSession(const QStringList& startupFiles) {
     restoringSession_=true;
     const auto session=sessionStore_.read();
     QString active=session.activePath;
-    for(const auto& tab:session.tabs)addPage(tab.path,tab.position,tab.encoding,tab.pinned);
+    for(const auto& tab:session.tabs)addPage(tab.path,tab.position,tab.encoding,tab.pinned)->setBookmarks(tab.bookmarks);
     normalizePinnedTabs();
     for(const auto& filename:startupFiles) {
         const auto path=normalized(filename);bool exists=false;
@@ -477,17 +511,27 @@ void MainWindow::restoreLastSession(const QStringList& startupFiles) {
         if(!exists)addPage(path);
         active=path;
     }
+    auto left=session.split.enabled?session.split.leftPath:active;
+    auto right=session.split.rightPath;
+    if(!startupFiles.isEmpty() && session.split.enabled){if(session.split.activeRight)right=active;else left=active;}
     int activeIndex=tabs_->count()?0:-1;
-    for(int i=0;i<tabs_->count();++i)if(pageAt(i)->path.compare(active,Qt::CaseInsensitive)==0){activeIndex=i;break;}
-    sessionInitialized_=true;restoringSession_=false;
+    for(int i=0;i<tabs_->count();++i)if(pageAt(i)->path.compare(left,Qt::CaseInsensitive)==0){activeIndex=i;break;}
     {QSignalBlocker blocker(tabs_);tabs_->setCurrentIndex(activeIndex);}
     if(activeIndex>=0)selectTab(activeIndex);
+    if(session.split.enabled) {
+        splitPercent_=session.split.leftPercent;
+        rightPositions_.insert(session.split.rightPath.toCaseFolded(),session.split.rightPosition);
+        rightEncodings_.insert(session.split.rightPath.toCaseFolded(),session.split.rightEncoding);
+        setSplitEnabled(true,right);activatePane(session.split.activeRight);
+    }
+    sessionInitialized_=true;restoringSession_=false;
 }
 
 SessionSnapshot MainWindow::sessionSnapshot() const {
     SessionSnapshot session;
-    for(int i=0;i<tabs_->count();++i)if(auto* page=pageAt(i))session.tabs.append({page->path,page->readingPosition(),page->encoding(),page->pinned});
+    for(int i=0;i<tabs_->count();++i)if(auto* page=pageAt(i))session.tabs.append({page->path,page->readingPosition(),page->encoding(),page->pinned,page->bookmarks()});
     if(auto* page=currentPage())session.activePath=page->path;
+    if(secondaryPage_ && primaryPage())session.split={true,rightActive_,primaryPage()->path,secondaryPage_->path,secondaryPage_->readingPosition(),secondaryPage_->encoding(),splitPercent_};
     return session;
 }
 void MainWindow::scheduleSessionSave() {
@@ -504,7 +548,7 @@ bool MainWindow::saveSession() {
 
 bool MainWindow::isTabPinned(int index) const {auto* page=pageAt(index);return page && page->pinned;}
 void MainWindow::normalizePinnedTabs() {
-    const QSignalBlocker blocker(tabs_);auto* active=currentPage();QVector<FilePage*> order;
+    const QSignalBlocker blocker(tabs_);auto* active=pageAt(tabs_->currentIndex());QVector<FilePage*> order;
     for(bool pinned:{true,false})for(int i=0;i<tabs_->count();++i)if(pageAt(i)->pinned==pinned)order.append(pageAt(i));
     for(int i=0;i<order.size();++i)for(int j=i;j<tabs_->count();++j)if(pageAt(j)==order[i]){if(j!=i)tabs_->moveTab(j,i);break;}
     for(int i=0;i<tabs_->count();++i)if(pageAt(i)==active){tabs_->setCurrentIndex(i);break;}
@@ -531,10 +575,12 @@ void MainWindow::closeTabsToRight(int index) {
 void MainWindow::removeTab(int index, bool activateNext) {
     auto* page=pageAt(index);if(!page)return;
     const QSignalBlocker blocker(tabs_);
+    if(secondaryPage_ && secondaryPage_->path.compare(page->path,Qt::CaseInsensitive)==0)setSplitEnabled(false);
     closed_.append(page->path);if(closed_.size()>20)closed_.removeFirst();
     if(fileWatcher_.files().contains(page->path))fileWatcher_.removePath(page->path);
+    rightPositions_.remove(page->path.toCaseFolded());rightEncodings_.remove(page->path.toCaseFolded());
     tabs_->removeTab(index);pages_->removeWidget(page);delete page;
-    if(!tabs_->count()){pages_->setCurrentWidget(welcome_);hideSearch();}
+    if(!tabs_->count()){setSplitEnabled(false);pages_->setCurrentWidget(welcome_);hideSearch();}
     else if(activateNext)selectTab(tabs_->currentIndex());
     refreshStatus();
     scheduleSessionSave();
@@ -542,8 +588,12 @@ void MainWindow::removeTab(int index, bool activateNext) {
 
 void MainWindow::selectTab(int index) {
     auto* page=pageAt(index);if(!page)return;
-    pages_->setCurrentWidget(page);page->activate();refreshStatus();
-    if(searchbar_->isVisible()){runSearch();search_->setFocus();}else if(page->editor)page->editor->setFocus();
+    if(rightActive_ && secondaryPage_){setSecondaryPath(page->path);page=secondaryPage_;}
+    else {pages_->setCurrentWidget(page);page->activate();}
+    if(!primaryPage() && tabs_->count())pages_->setCurrentWidget(pageAt(0));
+    if(auto* left=primaryPage())left->activate();
+    refreshStatus();
+    if(searchbar_->isVisible()){runSearch(false);search_->setFocus();}else if(page->editor)page->editor->setFocus();
     scheduleSessionSave();
 }
 
@@ -566,6 +616,7 @@ void MainWindow::showFilePicker(bool tabsOnly) {
 }
 
 void MainWindow::refreshStatus() {
+    refreshPaneHeaders();
     {const QSignalBlocker button(followButton_),action(followAction_);auto* page=currentPage();
         followButton_->setVisible(page!=nullptr);followButton_->setEnabled(page && !page->loading);followAction_->setEnabled(page && !page->loading);
         followButton_->setChecked(page && page->following());followAction_->setChecked(page && page->following());}
@@ -582,7 +633,7 @@ void MainWindow::refreshStatus() {
     } else {
         encodingButton_->hide();
         fileIcon_->setPixmap(Theme::icon("file",Theme::colors().subtle).pixmap(QSize(18,18),devicePixelRatioF()));
-        title_->setText("Zex");setWindowTitle("Zex");pathLabel_->setText(QStringLiteral("文件阅读器"));pathLabel_->setToolTip({});reloadButton_->hide();fileInfo_->setText("Zex 0.6.0");position_->clear();language_->clear();
+        title_->setText("Zex");setWindowTitle("Zex");pathLabel_->setText(QStringLiteral("文件阅读器"));pathLabel_->setToolTip({});reloadButton_->hide();fileInfo_->setText("Zex 0.7.0");position_->clear();language_->clear();
     }
 }
 
@@ -594,22 +645,57 @@ void MainWindow::showSearch() {
 }
 void MainWindow::hideSearch() {
     searchDebounce_.stop();searchbar_->hide();
+    if(resultsPanel_)resultsPanel_->hide();{QSignalBlocker blocker(resultsButton_);resultsButton_->setChecked(false);}
     for(int i=0;i<tabs_->count();++i)if(auto* p=pageAt(i);p&&p->editor)p->editor->clearSearch();
+    if(secondaryPage_ && secondaryPage_->editor)secondaryPage_->editor->clearSearch();
     if(auto* p=currentPage();p&&p->editor)p->editor->setFocus();
 }
-void MainWindow::runSearch() {
+void MainWindow::runSearch(bool navigate) {
     searchDebounce_.stop();if(!searchbar_->isVisible())return;
-    if(auto* page=currentPage();page&&page->ready)page->editor->setSearch(search_->text(),case_->isChecked(),whole_->isChecked());
+    if(auto* page=currentPage();page&&page->ready) {
+        if(selectionEditor_!=page->editor){selectionScope_.reset();selectionEditor_=nullptr;QSignalBlocker blocker(selectionButton_);selectionButton_->setChecked(false);}
+        page->editor->setSearch(search_->text(),case_->isChecked(),whole_->isChecked(),regexButton_->isChecked(),selectionScope_,navigate);
+        if(resultsModel_)resultsModel_->setEditor(page->editor);
+    }
     updateSearchLabel();
 }
-void MainWindow::updateSearchLabel() {if(auto* p=currentPage();p&&p->ready)count_->setText(p->editor->matchSummary());else count_->setText(QStringLiteral("等待文件载入"));}
+void MainWindow::updateSearchLabel() {
+    auto* page=currentPage();auto* editor=page && page->ready?page->editor:nullptr;
+    const auto summary=editor?editor->matchSummary():QStringLiteral("等待文件载入");
+    count_->setText(count_->fontMetrics().elidedText(summary,Qt::ElideRight,160));count_->setToolTip(summary);count_->setAccessibleName(summary);
+    cancelSearch_->setEnabled(editor && editor->searchBusy());search_->setToolTip(editor?editor->searchError():QString());
+    if(resultsModel_)resultsModel_->setEditor(editor);
+}
+void MainWindow::setSelectionSearch(bool on) {
+    selectionScope_.reset();selectionEditor_=nullptr;
+    if(on)if(auto* page=currentPage();page && page->ready) {
+        const auto begin=page->editor->send(SCI_GETSELECTIONSTART),end=page->editor->send(SCI_GETSELECTIONEND);
+        if(end>begin){selectionScope_=SearchMatch{begin,end};selectionEditor_=page->editor;}
+    }
+    if(on && !selectionScope_){QSignalBlocker blocker(selectionButton_);selectionButton_->setChecked(false);count_->setText(QStringLiteral("请先选择文本"));return;}
+    runSearch();
+}
+void MainWindow::showSearchResults(bool on) {
+    if(on && !resultsPanel_) {
+        resultsPanel_=new QWidget;resultsPanel_->setObjectName("searchResultsPanel");resultsPanel_->setMinimumHeight(90);
+        auto* layout=new QVBoxLayout(resultsPanel_);layout->setContentsMargins(10,4,10,4);layout->setSpacing(2);
+        auto* row=new QHBoxLayout;row->addWidget(label(QStringLiteral("匹配结果 · 点击跳转（最多显示 10,000 项）")));row->addStretch();auto* close=tool(resultsPanel_,"close",QStringLiteral("收起结果列表"));row->addWidget(close);connect(close,&QToolButton::clicked,this,[this]{resultsButton_->setChecked(false);});layout->addLayout(row);
+        resultsList_=new QListView;resultsList_->setObjectName("searchResultsList");resultsList_->setUniformItemSizes(true);resultsList_->setEditTriggers(QAbstractItemView::NoEditTriggers);resultsList_->setAccessibleName(QStringLiteral("搜索匹配结果"));
+        resultsModel_=new SearchResultsModel(resultsList_);resultsList_->setModel(resultsModel_);layout->addWidget(resultsList_,1);
+        auto choose=[this](const QModelIndex& index){resultsModel_->activate(index.row());};connect(resultsList_,&QListView::clicked,this,choose);connect(resultsList_,&QListView::activated,this,choose);
+        contentSplit_->addWidget(resultsPanel_);contentSplit_->setSizes({qMax(250,height()-300),180});
+    }
+    if(resultsPanel_)resultsPanel_->setVisible(on);updateSearchLabel();
+}
 void MainWindow::setWrap(bool on) {
     wrap_=on;{QSignalBlocker a(wrapButton_),b(wrapAction_);wrapButton_->setChecked(on);wrapAction_->setChecked(on);}
     for(int i=0;i<tabs_->count();++i)if(auto* p=pageAt(i))p->setWordWrap(on);
+    if(secondaryPage_)secondaryPage_->setWordWrap(on);
 }
 void MainWindow::changeFont(int delta) {
     appearance_.points=qBound(8,appearance_.points+delta,32);
     for(int i=0;i<tabs_->count();++i)if(auto* p=pageAt(i))p->setAppearance(appearance_);
+    if(secondaryPage_)secondaryPage_->setAppearance(appearance_);
     if(!testMode_)appearance_.save(settings_);
 }
 void MainWindow::showAppearanceSettings() {
@@ -631,6 +717,7 @@ void MainWindow::applyAppearance(const EditorAppearance& appearance, const QStri
         const auto path=button->property("filePath").toString();
         if(!path.isEmpty())button->setIcon(Theme::fileIcon(path));
     }
+    if(secondaryPage_){if(fontChanged)secondaryPage_->setAppearance(appearance_);if(secondaryPage_->editor)secondaryPage_->editor->setColorTheme(theme);}
     refreshThemeIcons();applyNativeChrome();updateRecentMenu();refreshStatus();tabs_->update();
     if(!testMode_){appearance_.save(settings_);settings_.setValue("iconTheme",FileIcons::theme());Theme::saveTheme(settings_,theme);settings_.sync();}
 }

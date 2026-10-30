@@ -18,6 +18,8 @@ constexpr int maximumTabs = 4096;
 qint64 nonnegative(const QJsonObject& object, const char* name) {
     return std::clamp<qint64>(object[name].toInteger(),0,std::numeric_limits<int>::max());
 }
+QJsonObject positionJson(const ReadingPosition& p){return {{"topLine",p.topLine},{"wrapOffset",p.wrapOffset},{"xOffset",p.xOffset},{"caretLine",p.caretLine},{"caretColumn",p.caretColumn},{"anchorLine",p.anchorLine},{"anchorColumn",p.anchorColumn}};}
+ReadingPosition readPosition(const QJsonObject& p){return {nonnegative(p,"topLine"),int(nonnegative(p,"wrapOffset")),int(nonnegative(p,"xOffset")),nonnegative(p,"caretLine"),nonnegative(p,"caretColumn"),nonnegative(p,"anchorLine"),nonnegative(p,"anchorColumn")};}
 }
 
 QByteArray SessionSnapshot::serialize() const {
@@ -26,9 +28,11 @@ QByteArray SessionSnapshot::serialize() const {
         const auto& p = tab.position;
         QJsonObject position{{"topLine",p.topLine},{"wrapOffset",p.wrapOffset},{"xOffset",p.xOffset},
             {"caretLine",p.caretLine},{"caretColumn",p.caretColumn},{"anchorLine",p.anchorLine},{"anchorColumn",p.anchorColumn}};
-        items.append(QJsonObject{{"path",tab.path},{"position",position},{"encoding",normalizedTextEncoding(tab.encoding)},{"pinned",tab.pinned}});
+        QJsonArray bookmarks;for(auto line:tab.bookmarks)bookmarks.append(line);
+        items.append(QJsonObject{{"path",tab.path},{"position",position},{"encoding",normalizedTextEncoding(tab.encoding)},{"pinned",tab.pinned},{"bookmarks",bookmarks}});
     }
-    return QJsonDocument(QJsonObject{{"version",1},{"activePath",activePath},{"tabs",items}}).toJson(QJsonDocument::Compact);
+    QJsonObject splitJson{{"enabled",split.enabled},{"activeRight",split.activeRight},{"leftPath",split.leftPath},{"rightPath",split.rightPath},{"rightPosition",positionJson(split.rightPosition)},{"rightEncoding",normalizedTextEncoding(split.rightEncoding)},{"leftPercent",split.leftPercent}};
+    return QJsonDocument(QJsonObject{{"version",1},{"activePath",activePath},{"tabs",items},{"split",splitJson}}).toJson(QJsonDocument::Compact);
 }
 
 SessionSnapshot SessionSnapshot::deserialize(const QByteArray& bytes) {
@@ -49,11 +53,18 @@ SessionSnapshot SessionSnapshot::deserialize(const QByteArray& bytes) {
         const auto p = item["position"].toObject();
         session.tabs.append({path, {nonnegative(p,"topLine"),int(nonnegative(p,"wrapOffset")),int(nonnegative(p,"xOffset")),
             nonnegative(p,"caretLine"),nonnegative(p,"caretColumn"),nonnegative(p,"anchorLine"),nonnegative(p,"anchorColumn")},normalizedTextEncoding(item["encoding"].toString()),item["pinned"].toBool()});
+        auto& bookmarks=session.tabs.last().bookmarks;
+        for(const auto& value:item["bookmarks"].toArray()){const auto line=value.toInteger(-1);if(line>=0 && line<=std::numeric_limits<int>::max())bookmarks.append(line);if(bookmarks.size()>=1000)break;}
+        std::sort(bookmarks.begin(),bookmarks.end());bookmarks.erase(std::unique(bookmarks.begin(),bookmarks.end()),bookmarks.end());
     }
     const auto active = QDir::cleanPath(QDir::fromNativeSeparators(root["activePath"].toString()));
     for (const auto& tab : session.tabs)
         if (tab.path.compare(active,Qt::CaseInsensitive) == 0) { session.activePath = tab.path; break; }
     if (session.activePath.isEmpty() && !session.tabs.isEmpty()) session.activePath = session.tabs.first().path;
+    const auto split=root["split"].toObject();
+    auto findPath=[&](const QString& raw){const auto path=QDir::cleanPath(QDir::fromNativeSeparators(raw));for(const auto& tab:session.tabs)if(tab.path.compare(path,Qt::CaseInsensitive)==0)return tab.path;return QString();};
+    const auto left=findPath(split["leftPath"].toString()),right=findPath(split["rightPath"].toString());
+    if(split["enabled"].toBool() && !left.isEmpty() && !right.isEmpty())session.split={true,split["activeRight"].toBool(),left,right,readPosition(split["rightPosition"].toObject()),normalizedTextEncoding(split["rightEncoding"].toString()),qBound(20,split["leftPercent"].toInt(50),80)};
     return session;
 }
 

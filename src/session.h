@@ -19,11 +19,20 @@ struct SessionTab {
     ReadingPosition position;
     QString encoding = "auto";
     bool pinned = false;
+    QVector<qint64> bookmarks;
 };
 
+struct SplitState {
+    bool enabled=false,activeRight=false;
+    QString leftPath,rightPath;
+    ReadingPosition rightPosition;
+    QString rightEncoding="auto";
+    int leftPercent=50;
+};
 struct SessionSnapshot {
     QVector<SessionTab> tabs;
     QString activePath;
+    SplitState split;
     QByteArray serialize() const;
     static SessionSnapshot deserialize(const QByteArray& bytes);
 };

@@ -5,6 +5,8 @@
 #include <QMainWindow>
 #include <QSettings>
 #include <QTabBar>
+#include <QPointer>
+#include <QHash>
 #include <optional>
 
 class QLabel;
@@ -15,6 +17,9 @@ class QMenu;
 class QVBoxLayout;
 class QProgressBar;
 class QPushButton;
+class QSplitter;
+class QListView;
+class SearchResultsModel;
 
 class FilePage : public QWidget {
     Q_OBJECT
@@ -38,6 +43,8 @@ public:
     QString encoding() const { return encoding_; }
     void setReadingPosition(const ReadingPosition& position);
     ReadingPosition readingPosition() const;
+    QVector<qint64> bookmarks() const;
+    void setBookmarks(const QVector<qint64>& lines);
     QString path;
     FileContent content;
     CodeEditor* editor = nullptr;
@@ -51,6 +58,7 @@ signals:
     void editorCreated();
     void loadingChanged();
     void followingChanged();
+    void bookmarksChanged();
 private:
     void setupFollowUi(QVBoxLayout* layout);
     void pollFollow();
@@ -88,6 +96,7 @@ private:
     QString encoding_ = "auto";
     QString loadedEncoding_ = "auto";
     std::optional<ReadingPosition> pendingPosition_;
+    QVector<qint64> bookmarks_;
 };
 
 class FileTabs : public QTabBar {
@@ -116,6 +125,11 @@ public:
     void receiveFiles(const QStringList& paths);
     void setCurrentEncoding(const QString& encoding);
     FilePage* currentPage() const;
+    FilePage* primaryPage() const;
+    FilePage* secondaryPage() const { return secondaryPage_.data(); }
+    bool splitEnabled() const { return secondaryPage_!=nullptr; }
+    void setSplitEnabled(bool on,const QString& rightPath = {});
+    void activatePane(bool right,bool focusEditor = true);
     int tabCount() const;
     void closeTab(int index);
     void closeAllTabs();
@@ -144,6 +158,24 @@ protected:
     bool eventFilter(QObject*, QEvent*) override;
     bool nativeEvent(const QByteArray&, void*, qintptr*) override;
 private:
+    void initializePanes();
+    void connectPage(FilePage* page);
+    void setSecondaryPath(const QString& path);
+    void refreshPaneHeaders();
+    QSplitter* paneSplit_ = nullptr;
+    QWidget* leftPane_ = nullptr;
+    QWidget* rightPane_ = nullptr;
+    QWidget* leftHeader_ = nullptr;
+    QWidget* rightHeader_ = nullptr;
+    QLabel* leftTitle_ = nullptr;
+    QLabel* rightTitle_ = nullptr;
+    QPointer<FilePage> secondaryPage_;
+    bool rightActive_ = false,syncingBookmarks_ = false;
+    int splitPercent_ = 50;
+    QHash<QString,ReadingPosition> rightPositions_;
+    QHash<QString,QString> rightEncodings_;
+    QAction* splitAction_ = nullptr;
+    QToolButton* splitButton_ = nullptr;
     FilePage* pageAt(int index) const;
     FilePage* addPage(const QString& path, const ReadingPosition& position = {},const QString& encoding = "auto", bool pinned = false);
     void normalizePinnedTabs();
@@ -154,7 +186,9 @@ private:
     QWidget* buildWelcome();
     void selectTab(int index);
     void refreshStatus();
-    void runSearch();
+    void runSearch(bool navigate = true);
+    void showSearchResults(bool on);
+    void setSelectionSearch(bool on);
     void updateSearchLabel();
     void setWrap(bool on);
     void changeFont(int delta);
@@ -174,10 +208,20 @@ private:
     QStringList recent_;
     QStringList closed_;
     FileTabs* tabs_;
-    QStackedWidget* pages_;
+    QStackedWidget* pages_ = nullptr;
     QWidget* welcome_;
     QWidget* titlebar_;
     QWidget* searchbar_;
+    QSplitter* contentSplit_;
+    QWidget* resultsPanel_ = nullptr;
+    QListView* resultsList_ = nullptr;
+    SearchResultsModel* resultsModel_ = nullptr;
+    QToolButton* regexButton_;
+    QToolButton* selectionButton_;
+    QToolButton* resultsButton_;
+    QToolButton* cancelSearch_;
+    QPointer<CodeEditor> selectionEditor_;
+    std::optional<SearchMatch> selectionScope_;
     QLabel* title_;
     QLabel* pathLabel_;
     QLabel* fileIcon_;

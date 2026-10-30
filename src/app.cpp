@@ -38,7 +38,7 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
     QCoreApplication::setLibraryPaths({plugins});
     qputenv("QT_PLUGIN_PATH",plugins.toUtf8());
     QApplication app(argc,argv);
-    app.setApplicationName("Zex");app.setOrganizationName("sixunited");app.setApplicationVersion("0.6.0.0");
+    app.setApplicationName("Zex");app.setOrganizationName("sixunited");app.setApplicationVersion("0.7.0.0");
     QThreadPool::globalInstance()->setMaxThreadCount(qMax(2,qMin(4,QThread::idealThreadCount())));
     QString reportPath,capturePath,searchText,sessionFile,verifyTheme,appearanceCapture;
     QPointer<AppearanceDialog> appearanceDialog;
@@ -49,6 +49,7 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
     QPointer<FilePickerDialog> pickerDialog;
     QString pickerCapture,pickerQuery,followReadyPath;bool verifyFollow=false,verifyAllTabs=false,followReadyWritten=false;
     QStringList verifyPins;
+    bool verifyRegex=false,verifyResults=false;QString verifyScope,verifyBookmarks;int searchCancelDelay=-1;
     QStringList files;
     bool testMode=false,verbatim=false;
     for(int i=1;i<args.size();++i) {
@@ -74,6 +75,11 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
         else if(args[i]=="--verify-pin"&&i+1<args.size()){verifyPins=args[++i].split(',');testMode=true;}
         else if(args[i]=="--verify-follow"){verifyFollow=true;testMode=true;}
         else if(args[i]=="--verify-follow-ready"&&i+1<args.size()){followReadyPath=args[++i];testMode=true;}
+        else if(args[i]=="--verify-regex"){verifyRegex=true;testMode=true;}
+        else if(args[i]=="--verify-results"){verifyResults=true;testMode=true;}
+        else if(args[i]=="--verify-scope"&&i+1<args.size()){verifyScope=args[++i];testMode=true;}
+        else if(args[i]=="--verify-bookmarks"&&i+1<args.size()){verifyBookmarks=args[++i];testMode=true;}
+        else if(args[i]=="--verify-search-cancel-ms"&&i+1<args.size()){searchCancelDelay=qBound(0,args[++i].toInt(),10000);testMode=true;}
         else files.append(args[i]);
     }
     QSettings preferences("sixunited","Zex");
@@ -118,7 +124,16 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
                 page->editor->goToLine(verifyLine);
                 page->editor->send(SCI_SETFIRSTVISIBLELINE,page->editor->send(SCI_VISIBLEFROMDOCLINE,verifyLine-1));
             }
-            if(!searchText.isEmpty()){window.showSearch();window.findChild<QLineEdit*>("searchInput")->setText(searchText);}
+            if(!verifyBookmarks.isEmpty())if(auto* page=window.currentPage();page && page->ready){QVector<qint64> lines;for(const auto& value:verifyBookmarks.split(',')){bool valid=false;auto line=value.toLongLong(&valid);if(valid && line>0)lines.append(line-1);}page->setBookmarks(lines);}
+            if(!searchText.isEmpty()){
+                if(!verifyScope.isEmpty())if(auto* page=window.currentPage();page && page->ready){const auto values=verifyScope.split(':');if(values.size()==2)page->editor->send(SCI_SETSEL,values[0].toLongLong(),values[1].toLongLong());}
+                window.showSearch();
+                if(!verifyScope.isEmpty())window.findChild<QToolButton*>("selectionSearch")->setChecked(true);
+                window.findChild<QLineEdit*>("searchInput")->setText(searchText);
+                window.findChild<QToolButton*>("regexSearch")->setChecked(verifyRegex);
+                if(verifyResults)window.findChild<QToolButton*>("searchResultsButton")->setChecked(true);
+                if(searchCancelDelay>=0)QTimer::singleShot(120+searchCancelDelay,&window,[&]{window.findChild<QToolButton*>("cancelSearch")->click();});
+            }
             if(!appearanceCapture.isEmpty()) {
                 appearanceDialog=new AppearanceDialog(window.currentPage()?window.currentPage()->editor->appearance():EditorAppearance::defaults(),FileIcons::theme(),&window);
                 appearanceDialog->show();
@@ -143,7 +158,7 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
                 if(auto* page=window.currentPage();page && page->editor && page->editor->searchBusy())return;
                 if(auto* page=window.currentPage();page && page->followBusy())return;
                 finish->stop();
-                QJsonObject report{{"version","0.6.0.0"},{"qt",qVersion()},{"tabs",window.tabCount()},{"startup_to_ready_ms",loadedMs},{"plugin_paths",QJsonArray::fromStringList(QCoreApplication::libraryPaths())}};
+                QJsonObject report{{"version","0.7.0.0"},{"qt",qVersion()},{"tabs",window.tabCount()},{"startup_to_ready_ms",loadedMs},{"plugin_paths",QJsonArray::fromStringList(QCoreApplication::libraryPaths())}};
                 const auto available=window.screen()->availableGeometry();
                 auto rectJson=[](const QRect& r){return QJsonArray{r.x(),r.y(),r.width(),r.height()};};
                 report.insert("startup_to_shell_ms",shellReadyMs);report.insert("max_ui_gap_ms",maxUiGap);report.insert("max_ready_ui_gap_ms",maxReadyUiGap);
@@ -162,6 +177,12 @@ extern "C" __declspec(dllexport) int runZex(int argc,char** argv,unsigned long l
                     report.insert("file",page->path);report.insert("ready",page->ready);report.insert("error",page->content.error);
                     report.insert("encoding",page->content.encoding);report.insert("language",page->editor->language());report.insert("search_matches",page->editor->matchCount());
                     report.insert("search_complete",!page->editor->searchBusy());
+                    report.insert("search_error",page->editor->searchError());report.insert("search_stopped",page->editor->searchStopped());report.insert("read_only",bool(page->editor->send(SCI_GETREADONLY)));
+                    if(auto* list=window.findChild<QListView*>("searchResultsList"))report.insert("search_results_rows",list->model()->rowCount());
+                    if(auto* bar=window.findChild<QWidget*>("searchbar");bar && bar->isVisible()){
+                        bool fits=true;for(auto* control:bar->findChildren<QWidget*>(QString(),Qt::FindDirectChildrenOnly))if(control->isVisible() && !bar->rect().contains(control->geometry()))fits=false;
+                        report.insert("search_controls_fit",fits);
+                    }
                     report.insert("load_canceled",page->wasCanceled());
                     report.insert("following",page->following());report.insert("follow_paused",page->followPaused());report.insert("follow_notice",page->followNotice());
                     if(page->ready){const auto length=page->editor->send(SCI_GETLENGTH);const auto* bytes=reinterpret_cast<const char*>(page->editor->send(SCI_GETCHARACTERPOINTER));report.insert("document_bytes",qint64(length));report.insert("document_sha256",QString::fromLatin1(QCryptographicHash::hash(QByteArrayView(bytes,length),QCryptographicHash::Sha256).toHex()));}

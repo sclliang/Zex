@@ -65,6 +65,7 @@ void FilePage::applyLogUpdate(const std::shared_ptr<LogUpdate>& update,quint64 g
         if(!update->replacement.document){applyingFollow_=false;setFollowing(false);followNotice_=QStringLiteral("无法准备日志文档，请重新开启跟随。");refreshFollowUi();return;}
         pendingPosition_.reset();editor->setPreparedContent(update->replacement,path);stack_->setCurrentWidget(editor);
         ready=true;attempted=true;stale=false;canceled_=false;loadedEncoding_=encoding_;
+        {const auto previous=bookmarks_;editor->setBookmarks(bookmarks_);bookmarks_=editor->bookmarks();if(previous!=bookmarks_)emit bookmarksChanged();}
     } else if(offset<update->appended.size()) {
         auto end=qMin<qsizetype>(offset+64*1024,update->appended.size());
         // Keep every visible intermediate document valid UTF-8.

@@ -1,4 +1,4 @@
-Zex 0.6.0.0
+Zex 0.7.0.0
 Copyright (c) 2026 sixunited. Author: sclliang
 
 Qt 6.8.3 (Qt Core, GUI, Widgets, Concurrent, Core5Compat, SVG and platform/image plugins)
@@ -21,6 +21,12 @@ Lexilla 5.5.4
 Copyright 1998-2026 by Neil Hodgson and contributors.
 License: Lexilla.txt
 Source: https://www.scintilla.org/lexilla554.zip
+
+PCRE2 10.49 (8-bit Unicode library, statically linked, JIT disabled)
+Copyright (c) 1997-2007 University of Cambridge; (c) 2007-2024 Philip Hazel and other contributors.
+License: BSD-3-Clause WITH PCRE2-exception; full notice in PCRE2.md.
+Source: https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz
+Unmodified upstream source and archive checksum are retained in vendor/pcre2.
 
 Material Icon Theme 5.40.0
 Copyright Philipp Kief and contributors. MIT license.

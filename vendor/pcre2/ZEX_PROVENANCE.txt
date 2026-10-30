@@ -1,0 +1,4 @@
+PCRE2 10.49
+Upstream: https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz
+Archive SHA-256: 929f0b20e62879252a15886b06c89f1edef61a363cbd5826fb041080a5e557ae
+Unmodified upstream source. Built statically, 8-bit Unicode only, JIT disabled.

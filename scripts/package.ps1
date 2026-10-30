@@ -19,6 +19,7 @@ $licensesDir = Join-Path $binDir 'licenses'
 New-Item -ItemType Directory -Force $licensesDir | Out-Null
 Copy-Item -LiteralPath (Join-Path $projectRoot 'vendor\scintilla\License.txt') -Destination (Join-Path $licensesDir 'Scintilla.txt') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'vendor\lexilla\License.txt') -Destination (Join-Path $licensesDir 'Lexilla.txt') -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'vendor\pcre2\LICENCE.md') -Destination (Join-Path $licensesDir 'PCRE2.md') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.txt') -Destination $licensesDir -Force
 if (Test-Path (Join-Path $QtRoot 'LICENSES')) { Copy-Item -LiteralPath (Join-Path $QtRoot 'LICENSES') -Destination (Join-Path $licensesDir 'Qt') -Recurse -Force }
 $qtNotices = Join-Path $projectRoot 'vendor\qt-notices'

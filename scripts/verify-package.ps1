@@ -103,11 +103,11 @@ if (!$?) { throw 'Single-instance verification failed' }
 $results | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath (Join-Path $artifactsDir 'package-verification.json') -Encoding UTF8
 $results | Select-Object file,tabs,encoding,language,search_matches,startup_to_ready_ms | Format-Table -AutoSize
 $version = (Get-Item -LiteralPath (Join-Path $packageDir 'Zex.exe')).VersionInfo
-if ($version.CompanyName -ne 'sixunited' -or $version.FileVersion -ne '0.6.0.0' -or $version.OriginalFilename -ne 'Zex.exe' -or $version.LegalCopyright -ne 'Copyright (c) 2026 sixunited. Author: sclliang') { throw 'VERSIONINFO mismatch' }
-if ($version.ProductName -ne 'Zex' -or $version.InternalName -ne 'Zex' -or $version.FileDescription -ne 'Zex File and Code Viewer' -or $version.ProductVersion -ne '0.6.0.0' -or $version.FileMajorPart -ne 0 -or $version.FileMinorPart -ne 6 -or $version.FileBuildPart -ne 0 -or $version.FilePrivatePart -ne 0) { throw 'Product or numeric version mismatch' }
+if ($version.CompanyName -ne 'sixunited' -or $version.FileVersion -ne '0.7.0.0' -or $version.OriginalFilename -ne 'Zex.exe' -or $version.LegalCopyright -ne 'Copyright (c) 2026 sixunited. Author: sclliang') { throw 'VERSIONINFO mismatch' }
+if ($version.ProductName -ne 'Zex' -or $version.InternalName -ne 'Zex' -or $version.FileDescription -ne 'Zex File and Code Viewer' -or $version.ProductVersion -ne '0.7.0.0' -or $version.FileMajorPart -ne 0 -or $version.FileMinorPart -ne 7 -or $version.FileBuildPart -ne 0 -or $version.FilePrivatePart -ne 0) { throw 'Product or numeric version mismatch' }
 $distDir = Join-Path $projectRoot 'dist'
 New-Item -ItemType Directory -Force $distDir | Out-Null
-$zip = Join-Path $distDir 'Zex-0.6.0-win-x64.zip'
+$zip = Join-Path $distDir 'Zex-0.7.0-win-x64.zip'
 Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zip -Force
 Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Format-List | Out-String | Set-Content -LiteralPath ($zip + '.sha256.txt')
 Write-Output "Verified portable ZIP: $zip"

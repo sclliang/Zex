@@ -103,6 +103,9 @@ QIcon Theme::icon(const QString& name, QColor color, int size) {
     else if (name == "down") p.drawPolyline(QPolygonF({{5,8},{10,13},{15,8}}));
     else if (name == "files") { p.drawRoundedRect(QRectF(3,6,10,11),1,1);p.drawPolyline(QPolygonF({{7,6},{7,3},{17,3},{17,13},{13,13}})); }
     else if (name == "pin") { p.drawPolygon(QPolygonF({{7,3},{14,3},{13,8},{16,11},{5,11},{8,8}}));p.drawLine(QPointF(10,11),QPointF(10,17)); }
+    else if (name == "stop")p.drawRect(QRectF(6,6,8,8));
+    else if (name == "split") {p.drawRoundedRect(QRectF(3,4,14,12),1,1);p.drawLine(QPointF(10,4),QPointF(10,16));}
+    else if (name == "list") {for(int y:{5,10,15}){p.drawPoint(QPointF(4,y));p.drawLine(QPointF(8,y),QPointF(17,y));}}
     else if (name == "right") p.drawPolyline(QPolygonF({{8,5},{13,10},{8,15}}));
     else if (name == "folder") { p.drawPolygon(QPolygonF({{3,6},{8,6},{10,8},{17,8},{16,15},{3,15}})); p.drawPolyline(QPolygonF({{3,6},{3,4},{8,4},{10,6},{16,6},{16,8}})); }
     else if (name == "wrap") { p.drawLine(QPointF(3,5),QPointF(17,5)); p.drawLine(QPointF(3,9),QPointF(13,9)); p.drawArc(QRectF(10,9,7,6),-90*16,180*16); p.drawLine(QPointF(13,15),QPointF(9,15)); p.drawPolyline(QPolygonF({{11,13},{9,15},{11,17}})); p.drawLine(QPointF(3,14),QPointF(6,14)); }
@@ -123,6 +126,13 @@ QString styleSheet(const Theme::Colors& c) {
       QDialog { background: @background; color: @text; }
       QDialog#filePicker { background: @elevated; border: 1px solid @border; }
       QListView#filePickerList { background: @elevated; border: none; outline: none; }
+      QWidget#searchResultsPanel { background: @elevated; border-top: 1px solid @border; }
+      QListView#searchResultsList { background: @elevated; color: @text; border: none; outline: none; }
+      QListView#searchResultsList::item { padding: 5px 8px; }
+      QListView#searchResultsList::item:selected { background: @selection; color: @text; }
+      QSplitter::handle { background: @border; }
+      QWidget#paneHeader { background: @chrome; border-bottom: 1px solid @border; }
+      QWidget#paneHeader[active="true"] { border-bottom: 2px solid @accent; }
       QWidget#titlebar { background: @chrome; }
       QWidget#tabstrip { background: @chrome; border-bottom: 1px solid @border; }
       QWidget#breadcrumb { background: @background; border-bottom: 1px solid @border; }

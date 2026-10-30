@@ -44,6 +44,107 @@ struct RegistrySandbox {
 class ZexTests : public QObject {
     Q_OBJECT
 private slots:
+    void bookmarksNavigationAndReload() {
+        CodeEditor editor;editor.resize(850,500);editor.show();QVERIFY(QTest::qWaitForWindowExposed(&editor));
+        editor.setContent(decodeFile(QByteArray("line\n").repeated(150)),"notes.txt");
+        editor.restoreReadingPosition({40,0,0,45,2,45,1});const auto position=editor.readingPosition();
+        editor.setBookmarks({149,0,50,50,-1,999});QCOMPARE(editor.bookmarks(),QVector<qint64>({0,50,149}));
+        editor.toggleBookmark(70);QVERIFY(editor.readingPosition()==position);QVERIFY(editor.nextBookmark());QCOMPARE(editor.readingPosition().caretLine,qint64(50));
+        QVERIFY(editor.nextBookmark(true));QCOMPARE(editor.readingPosition().caretLine,qint64(0));QVERIFY(editor.nextBookmark(true));QCOMPARE(editor.readingPosition().caretLine,qint64(149));
+        editor.toggleBookmark();QCOMPARE(editor.bookmarks(),QVector<qint64>({0,50,70}));
+        editor.setColorTheme("paper");auto appearance=editor.appearance();appearance.points=15;editor.setAppearance(appearance);QCOMPARE(editor.bookmarks(),QVector<qint64>({0,50,70}));
+        editor.setBookmarks({});QVERIFY(!editor.nextBookmark());
+        QTemporaryDir directory;const auto path=directory.filePath("bookmark.txt");QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));file.write("a\nb\nc");file.close();
+        FilePage page(path);page.setBookmarks({0,2,999});QVERIFY(!page.editor);page.show();page.activate();QTRY_VERIFY(page.ready && !page.loading);QCOMPARE(page.bookmarks(),QVector<qint64>({0,2}));
+        QVERIFY(file.open(QIODevice::WriteOnly|QIODevice::Truncate));file.write("short");file.close();page.reload();QTRY_VERIFY(page.ready && !page.loading);QCOMPARE(page.bookmarks(),QVector<qint64>({0}));
+    }
+    void splitSessionIndependentPositionsAndLazyLoad() {
+        QTemporaryDir directory;SessionSnapshot seed;
+        for(int i=0;i<100;++i){auto path=directory.filePath(QString("file%1.txt").arg(i));QFile f(path);QVERIFY(f.open(QIODevice::WriteOnly));f.write(QByteArray("reading line 123\n").repeated(300));seed.tabs.append({path,{20,0,0,25,3,25,3},"auto",false,{3,50}});}
+        seed.activePath=seed.tabs[7].path;seed.split={true,true,seed.tabs[2].path,seed.tabs[7].path,{140,0,0,147,3,147,3},"utf-8",60};
+        const auto sessionPath=directory.filePath("session.json");SessionStore store(sessionPath);QVERIFY(store.write(seed));
+        MainWindow window(true,sessionPath);window.show();QVERIFY(QTest::qWaitForWindowExposed(&window));window.restoreLastSession();QTRY_VERIFY(window.allLoaded());
+        QVERIFY(window.splitEnabled());QCOMPARE(window.tabCount(),100);QCOMPARE(window.findChildren<CodeEditor*>().size(),2);QCOMPARE(window.currentPage(),window.secondaryPage());
+        QCOMPARE(window.primaryPage()->path,seed.tabs[2].path);QTRY_VERIFY(window.primaryPage()->readingPosition()==seed.tabs[2].position);QTRY_VERIFY(window.secondaryPage()->readingPosition()==seed.split.rightPosition);
+        QCOMPARE(window.secondaryPage()->encoding(),QString("utf-8"));QCOMPARE(window.secondaryPage()->bookmarks(),seed.tabs[7].bookmarks);
+        window.activatePane(false);window.primaryPage()->editor->restoreReadingPosition({55,0,0,60,2,60,2});
+        auto saved=window.sessionSnapshot();QVERIFY(!saved.split.activeRight);QCOMPARE(saved.split.leftPercent,60);QVERIFY(window.saveSession());window.close();
+        MainWindow reopened(true,sessionPath);reopened.show();QVERIFY(QTest::qWaitForWindowExposed(&reopened));reopened.restoreLastSession();QTRY_VERIFY(reopened.allLoaded());
+        QCOMPARE(reopened.findChildren<CodeEditor*>().size(),2);QTRY_VERIFY(reopened.sessionSnapshot().serialize()==saved.serialize());
+        reopened.close();
+        MainWindow cli(true,sessionPath);cli.show();cli.restoreLastSession({seed.tabs[9].path});QTRY_VERIFY(cli.allLoaded());
+        QCOMPARE(cli.primaryPage()->path,seed.tabs[9].path);QCOMPARE(cli.secondaryPage()->path,seed.tabs[7].path);QCOMPARE(cli.findChildren<CodeEditor*>().size(),2);cli.close();
+        auto json=QJsonDocument::fromJson(seed.serialize()).object();auto split=json["split"].toObject();split["rightPath"]=directory.filePath("missing-tab.txt");json["split"]=split;
+        QVERIFY(!SessionSnapshot::deserialize(QJsonDocument(json).toJson()).split.enabled);
+    }
+    void splitSameFileBookmarksSearchAndClosing() {
+        QTemporaryDir directory;const auto path=directory.filePath("same.txt"),other=directory.filePath("other.txt");
+        for(const auto& name:{path,other}){QFile f(name);QVERIFY(f.open(QIODevice::WriteOnly));f.write(QByteArray("alpha 123 beta\n").repeated(300));}
+        MainWindow window(true);window.show();QVERIFY(QTest::qWaitForWindowExposed(&window));auto* left=window.openPath(path);QTRY_VERIFY(window.allLoaded());
+        left->editor->restoreReadingPosition({20,0,0,25,2,25,2});window.setSplitEnabled(true);QTRY_VERIFY(window.allLoaded());auto* right=window.secondaryPage();
+        QVERIFY(left!=right);QVERIFY(left->editor!=right->editor);right->editor->restoreReadingPosition({170,0,0,175,4,175,4});QCOMPARE(left->readingPosition().topLine,qint64(20));
+        right->editor->toggleBookmark(175);QCOMPARE(left->bookmarks(),QVector<qint64>({175}));left->editor->toggleBookmark(20);QCOMPARE(right->bookmarks(),QVector<qint64>({20,175}));
+        right->editor->setSearch("123",true,false,true);QTRY_VERIFY(!right->editor->searchBusy());QCOMPARE(right->editor->matchCount(),300);QCOMPARE(left->editor->matchCount(),0);
+        const auto leftPosition=left->readingPosition();const auto rightPosition=right->readingPosition();
+        window.activatePane(false);QCOMPARE(window.currentPage(),left);window.activatePane(true);QCOMPARE(window.currentPage(),right);
+        auto* changed=window.openPath(other);QTRY_VERIFY(window.allLoaded());QCOMPARE(window.primaryPage(),left);QCOMPARE(changed,window.secondaryPage());QCOMPARE(changed->path,other);
+        window.openPath(path);QTRY_VERIFY(window.allLoaded());QTRY_VERIFY(window.secondaryPage()->readingPosition()==rightPosition);QVERIFY(left->readingPosition()==leftPosition);
+        window.setTabPinned(0,true);window.closeTab(0);QVERIFY(window.splitEnabled());QCOMPARE(window.tabCount(),2);
+        window.setTabPinned(0,false);window.closeTab(0);QVERIFY(!window.splitEnabled());QTRY_VERIFY(window.allLoaded());QCOMPARE(window.currentPage()->path,other);QVERIFY(window.currentPage()->ready);
+        window.setSplitEnabled(true);QTRY_VERIFY(window.allLoaded());window.closeAllTabs();QCOMPARE(window.tabCount(),0);QVERIFY(!window.splitEnabled());QVERIFY(!window.currentPage());window.close();
+    }
+    void searchControlsAndResultsFollowActivePane() {
+        QTemporaryDir directory;const auto path=directory.filePath("query.txt");QFile f(path);QVERIFY(f.open(QIODevice::WriteOnly));f.write("alpha 123\nalpha 456\nlast 789\n");f.close();
+        MainWindow window(true);window.show();QVERIFY(QTest::qWaitForWindowExposed(&window));window.openPath(path);QTRY_VERIFY(window.allLoaded());window.setSplitEnabled(true);QTRY_VERIFY(window.allLoaded());window.showSearch();
+        auto* input=window.findChild<QLineEdit*>("searchInput");auto* regex=window.findChild<QToolButton*>("regexSearch");auto* selection=window.findChild<QToolButton*>("selectionSearch");auto* results=window.findChild<QToolButton*>("searchResultsButton");QVERIFY(input && regex && selection && results);
+        auto* right=window.secondaryPage()->editor;right->send(SCI_SETSEL,0,20);QTest::mouseClick(selection,Qt::LeftButton);input->setText("\\d+");QTest::mouseClick(regex,Qt::LeftButton);QTRY_VERIFY(!right->searchBusy());QCOMPARE(right->matchCount(),2);
+        QTest::mouseClick(results,Qt::LeftButton);auto* list=window.findChild<QListView*>("searchResultsList");QVERIFY(list);QCOMPARE(list->model()->rowCount(),2);
+        QTest::mouseClick(list->viewport(),Qt::LeftButton,Qt::NoModifier,list->visualRect(list->model()->index(1,0)).center());QCOMPARE(right->selectedText(),QString("456"));
+        window.activatePane(false);auto* left=window.primaryPage()->editor;QTRY_VERIFY(!left->searchBusy());QVERIFY(!selection->isChecked());QCOMPARE(left->matchCount(),3);QCOMPARE(list->model()->rowCount(),3);
+        input->setText("(");QTest::keyClick(input,Qt::Key_Return);QTRY_VERIFY(!left->searchBusy());QVERIFY(!left->searchError().isEmpty());QVERIFY(!input->toolTip().isEmpty());
+        window.hideSearch();QCOMPARE(left->matchCount(),0);QCOMPARE(right->matchCount(),0);QVERIFY(!list->isVisible());window.close();
+    }
+    void regexSearchUnicodeLimitsAndCancellation() {
+        auto control=std::make_shared<RegexControl>();RegexRequest request;
+        request.text=QStringLiteral("first\r\n中文 123\r\n中文 456\r\nlast").toUtf8();request.pattern=QStringLiteral("^中文 \\d+$").toUtf8();request.caseSensitive=true;
+        auto result=searchRegex(request,control);QVERIFY2(result.error.isEmpty(),qPrintable(result.error));QCOMPARE(result.matches.size(),2);
+        QCOMPARE(request.text.mid(result.matches[0].first,result.matches[0].second-result.matches[0].first),QStringLiteral("中文 123").toUtf8());
+        request.pattern="(?=中)";result=searchRegex(request,control);QCOMPARE(result.matches.size(),2);QCOMPARE(result.matches[0].first,result.matches[0].second);
+        request.pattern="(";result=searchRegex(request,control);QVERIFY(!result.error.isEmpty());
+        request.pattern="(a+)+$";request.text=QByteArray(100000,'a')+"!";QElapsedTimer elapsed;elapsed.start();result=searchRegex(request,control);QVERIFY(!result.error.isEmpty());QVERIFY(elapsed.elapsed()<4000);
+        request.pattern="z";request.text=QByteArray(64*1024*1024,'a');auto future=QtConcurrent::run([request,control]{return searchRegex(request,control);});QTest::qWait(10);control->canceled.store(true);QTRY_VERIFY_WITH_TIMEOUT(future.isFinished(),2000);QVERIFY(future.result().canceled);
+        control=std::make_shared<RegexControl>();request.text="\xff";result=searchRegex(request,control);QVERIFY(!result.error.isEmpty());
+    }
+    void editorRegexSelectionResultsAndRaces() {
+        CodeEditor editor;editor.resize(850,500);editor.show();QVERIFY(QTest::qWaitForWindowExposed(&editor));
+        const auto bytes=QStringLiteral("中文 one 123\n中文 two 456\nlast 789\n").toUtf8();editor.setContent(decodeFile(bytes),"sample.txt");
+        editor.setSearch("\\d+",true,false,true);QTRY_VERIFY(!editor.searchBusy());QVERIFY2(editor.searchError().isEmpty(),qPrintable(editor.searchError()));QCOMPARE(editor.matchCount(),3);QCOMPARE(editor.selectedText(),QString("123"));
+        QVERIFY(editor.resultText(0).contains(QStringLiteral("中文 one 123")));QVERIFY(editor.selectResult(1));QCOMPARE(editor.selectedText(),QString("456"));
+        QVERIFY(editor.findNext());QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.selectedText(),QString("789"));QVERIFY(editor.findNext());QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.selectedText(),QString("123"));
+        QVERIFY(editor.findNext(true));QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.selectedText(),QString("789"));
+        const qint64 start=bytes.indexOf("two"),end=bytes.indexOf("last");
+        editor.setSearch("\\d+",true,false,true,SearchMatch{start,end});QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.matchCount(),1);QCOMPARE(editor.selectedText(),QString("456"));
+        editor.setSearch("中文",true,false,false,SearchMatch{bytes.indexOf('\n')+1,bytes.size()});QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.matchCount(),1);QVERIFY(editor.findNext());QCOMPARE(editor.send(SCI_GETSELECTIONSTART),sptr_t(bytes.indexOf('\n')+1));
+        editor.setSearch(".",true,false,true);editor.cancelSearch();QVERIFY(editor.searchStopped());QVERIFY(!editor.searchBusy());editor.setSearch("789",true,false);QTRY_VERIFY(!editor.searchBusy());QTest::qWait(50);QCOMPARE(editor.matchCount(),1);QCOMPARE(editor.selectedText(),QString("789"));
+        editor.setSearch("\\d+",true,false,true);editor.appendLogText("new 999\n","sample.txt",false);QTest::qWait(50);QVERIFY(editor.searchStopped());QVERIFY(editor.searchError().contains(QStringLiteral("内容已更新")));
+    }
+    void regexNavigationBeyondResultCap() {
+        CodeEditor editor;editor.setContent(decodeFile(QByteArray("hit\n").repeated(12000)),"hits.log");editor.setSearch("h.t",true,false,true);QTRY_VERIFY_WITH_TIMEOUT(!editor.searchBusy(),5000);QCOMPARE(editor.matchCount(),10000);
+        editor.send(SCI_SETSEL,11000*4,11000*4+3);QVERIFY(editor.findNext());QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.send(SCI_GETSELECTIONSTART),sptr_t(11001*4));
+        QVERIFY(editor.findNext(true));QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.send(SCI_GETSELECTIONSTART),sptr_t(11000*4));
+    }
+    void regexCaretAndEmptyMatchNavigation() {
+        CodeEditor editor;editor.setContent(decodeFile("123 abc 456"),"test.txt");
+        editor.setSearch("\\d+",true,false,true,{},false);QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.send(SCI_GETCURRENTPOS),sptr_t(0));
+        QVERIFY(editor.findNext());QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.selectedText(),QString("123"));
+        QVERIFY(editor.findNext());QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.selectedText(),QString("456"));
+        QVERIFY(editor.findNext());QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.selectedText(),QString("123"));
+        editor.send(SCI_SETSEL,0,7);QVERIFY(editor.findNext());QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.selectedText(),QString("456"));
+        editor.send(SCI_SETEMPTYSELECTION,0);editor.setSearch("^|$",true,false,true);QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.matchCount(),2);
+        QVERIFY(editor.findNext());QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.send(SCI_GETCURRENTPOS),sptr_t(11));
+        QVERIFY(editor.findNext());QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.send(SCI_GETCURRENTPOS),sptr_t(0));
+        QVERIFY(editor.findNext(true));QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.send(SCI_GETCURRENTPOS),sptr_t(11));
+    }
     void logReaderEncodingBoundaries_data() {
         QTest::addColumn<QString>("encoding");
         for(const auto& id:textEncodingIds())if(id!="auto")QTest::newRow(qPrintable(id))<<id;

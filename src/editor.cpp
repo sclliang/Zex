@@ -10,6 +10,7 @@
 #include <QFont>
 #include <QMimeData>
 #include <QUrl>
+#include <QToolTip>
 #include <algorithm>
 
 namespace {
@@ -50,7 +51,8 @@ CodeEditor::CodeEditor(QWidget* parent) : ScintillaEditBase(parent), colorTheme_
     send(SCI_SETMARGINMASKN, 1, SC_MASK_FOLDERS);
     send(SCI_SETMARGINSENSITIVEN, 1, 1);
     send(SCI_SETMARGINWIDTHN, 1, 16);
-    send(SCI_SETMARGINWIDTHN, 2, 0);
+    send(SCI_SETMARGINTYPEN,2,SC_MARGIN_SYMBOL);send(SCI_SETMARGINMASKN,2,1<<1);send(SCI_SETMARGINSENSITIVEN,2,1);send(SCI_SETMARGINWIDTHN,2,14);
+    send(SCI_MARKERDEFINE,1,SC_MARK_BOOKMARK);send(SCI_MARKERSETFORE,1,rgb(Theme::colors().accent));send(SCI_MARKERSETBACK,1,rgb(Theme::colors().accent));
     send(SCI_SETFOLDMARGINCOLOUR, 1, rgb(Theme::colors().background));
     send(SCI_SETFOLDMARGINHICOLOUR, 1, rgb(Theme::colors().background));
     for (int i = SC_MARKNUM_FOLDEREND; i <= SC_MARKNUM_FOLDEROPEN; ++i) {
@@ -92,6 +94,7 @@ CodeEditor::CodeEditor(QWidget* parent) : ScintillaEditBase(parent), colorTheme_
     });
     connect(this, &ScintillaEditBase::marginClicked, this, [this](Scintilla::Position pos, Scintilla::KeyMod, int margin) {
         if (margin == 1) send(SCI_TOGGLEFOLD, send(SCI_LINEFROMPOSITION, pos));
+        if(margin==2)toggleBookmark(send(SCI_LINEFROMPOSITION,pos));
     });
     connect(this, &ScintillaEditBase::zoom, this, [this] { updateMargins(); });
     connect(&searchTimer_, &QTimer::timeout, this, &CodeEditor::countMatches);
@@ -103,6 +106,7 @@ void CodeEditor::setContent(const FileContent& content, const QString& path) {
     send(SCI_SETREADONLY, 0);
     // SCI_ADDTEXT accepts an explicit byte length; the decoder rejects embedded NULs.
     send(SCI_CLEARALL);
+    send(SCI_MARKERDELETEALL,1);
     send(SCI_ADDTEXT, content.utf8.size(), reinterpret_cast<sptr_t>(content.utf8.constData()));
     send(SCI_EMPTYUNDOBUFFER);
     send(SCI_SETREADONLY, 1);
@@ -128,6 +132,9 @@ bool CodeEditor::appendLogText(const QByteArray& utf8,const QString& path,bool l
     if(large && lexer_!="null")configureLanguage(path,true);
     updateMargins();
     if(!query_.isEmpty()) {
+        if(regex_){cancelSearch();matches_.clear();regexSnapshot_.clear();send(SCI_SETINDICATORCURRENT,searchIndicator);send(SCI_INDICATORCLEARRANGE,0,send(SCI_GETLENGTH));searchError_=QStringLiteral("内容已更新，按 Enter 重新搜索");emit searchChanged();return true;}
+        if(searchInSelection_ || stopped_)return true;
+        searchEnd_=send(SCI_GETLENGTH);
         // Re-scan only the boundary (including whole-word matches that may now extend).
         auto from=qMax<sptr_t>(0,oldLength-query_.size()*16-4);
         from=send(SCI_POSITIONBEFORE,send(SCI_POSITIONAFTER,from));
@@ -348,22 +355,57 @@ void CodeEditor::applyColors() {
     color({STYLE_LINENUMBER},p.subtle);color({STYLE_INDENTGUIDE},p.border);
     color({STYLE_BRACELIGHT},p.accent);send(SCI_STYLESETBACK,STYLE_BRACELIGHT,rgb(p.selection));
     color({STYLE_BRACEBAD},p.error);send(SCI_STYLESETBACK,STYLE_BRACEBAD,rgb(p.elevated));
+    send(SCI_MARKERSETFORE,1,rgb(p.accent));send(SCI_MARKERSETBACK,1,rgb(p.accent));
+}
+
+QVector<qint64> CodeEditor::bookmarks() const {
+    QVector<qint64> result;auto line=send(SCI_MARKERNEXT,0,1<<1);
+    while(line>=0){result.append(line);line=send(SCI_MARKERNEXT,line+1,1<<1);}return result;
+}
+void CodeEditor::setBookmarks(const QVector<qint64>& lines) {
+    auto next=lines;std::sort(next.begin(),next.end());next.erase(std::unique(next.begin(),next.end()),next.end());
+    const auto limit=send(SCI_GETLINECOUNT);next.erase(std::remove_if(next.begin(),next.end(),[limit](auto line){return line<0 || line>=limit;}),next.end());if(next.size()>1000)next.resize(1000);
+    if(next==bookmarks())return;send(SCI_MARKERDELETEALL,1);for(auto line:next)send(SCI_MARKERADD,line,1);emit bookmarksChanged();
+}
+void CodeEditor::toggleBookmark(qint64 line) {
+    if(line<0)line=send(SCI_LINEFROMPOSITION,send(SCI_GETCURRENTPOS));
+    if(line>=send(SCI_GETLINECOUNT))return;
+    if(send(SCI_MARKERGET,line)&(1<<1))send(SCI_MARKERDELETE,line,1);
+    else {if(bookmarks().size()>=1000){QToolTip::showText(mapToGlobal(QPoint(20,20)),QStringLiteral("每个文件最多保存 1,000 个书签。"),this);return;}send(SCI_MARKERADD,line,1);}
+    emit bookmarksChanged();
+}
+bool CodeEditor::nextBookmark(bool backwards) {
+    const auto lines=bookmarks();if(lines.isEmpty())return false;
+    const auto current=send(SCI_LINEFROMPOSITION,send(SCI_GETCURRENTPOS));qint64 next=backwards?lines.last():lines.first();
+    if(backwards){for(auto it=lines.crbegin();it!=lines.crend();++it)if(*it<current){next=*it;break;}}
+    else for(auto line:lines)if(line>current){next=line;break;}
+    goToLine(int(next)+1);return true;
 }
 
 void CodeEditor::clearSearch() {
+    if(regexControl_)regexControl_->canceled.store(true);regexControl_.reset();++searchGeneration_;
+    regexBusy_=false;regexSnapshot_.clear();searchError_.clear();stopped_=false;lastRegexMatch_.reset();
     searchTimer_.stop(); query_.clear(); matches_.clear(); counting_=false; capped_=false; navigating_=false;
     send(SCI_SETINDICATORCURRENT,searchIndicator);
     send(SCI_INDICATORCLEARRANGE,0,send(SCI_GETLENGTH));
     emit searchChanged();
 }
 
-void CodeEditor::setSearch(const QString& query, bool caseSensitive, bool wholeWord) {
+void CodeEditor::setSearch(const QString& query, bool caseSensitive, bool wholeWord,bool regex,std::optional<SearchMatch> scope,bool navigate) {
     clearSearch();
     if (query.isEmpty()) return;
     query_=query.toUtf8();
+    regex_=regex;regexAutoNavigate_=navigate;searchInSelection_=scope.has_value();
+    searchStart_=scope?std::clamp<qint64>(scope->first,0,send(SCI_GETLENGTH)):0;
+    searchEnd_=scope?std::clamp<qint64>(scope->second,searchStart_,send(SCI_GETLENGTH)):send(SCI_GETLENGTH);
     searchFlags_=(caseSensitive ? SCFIND_MATCHCASE : 0) | (wholeWord ? SCFIND_WHOLEWORD : 0);
-    scanAt_=0; counting_=true;
-    beginNavigation(false,true);
+    if(regex_) {
+        regexCaret_=send(SCI_GETCURRENTPOS);regexAnchor_=send(SCI_GETANCHOR);regexBusy_=true;
+        try {regexSnapshot_=QByteArray(searchEnd_-searchStart_+1,Qt::Uninitialized);}catch(...){regexBusy_=false;searchError_=QStringLiteral("内存不足，无法搜索。");emit searchChanged();return;}
+        const auto generation=searchGeneration_;QTimer::singleShot(0,this,[this,generation]{copyRegexSnapshot(generation,0);});emit searchChanged();return;
+    }
+    scanAt_=searchStart_; counting_=true;
+    if(navigate)beginNavigation(false,true);
     searchTimer_.start();
 }
 
@@ -387,7 +429,7 @@ sptr_t CodeEditor::searchChunk(sptr_t& cursor,sptr_t limit,bool backwards,bool& 
 void CodeEditor::countMatches() {
     QElapsedTimer timer; timer.start();
     if(navigating_)advanceNavigation();
-    const auto length=send(SCI_GETLENGTH);
+    const auto length=searchEnd_;
     send(SCI_SETINDICATORCURRENT,searchIndicator);
     while (counting_ && timer.elapsed()<8) {
         bool done=false;
@@ -406,15 +448,17 @@ void CodeEditor::countMatches() {
 }
 
 bool CodeEditor::findNext(bool backwards) {
+    if(stopped_)return false;
     if(query_.isEmpty() || (!counting_ && matches_.isEmpty()))return false;
+    if(regex_){if(regexBusy_)return false;runRegex(backwards?RegexMode::Previous:RegexMode::Next,false);return true;}
     return beginNavigation(backwards,false);
 }
 
 bool CodeEditor::beginNavigation(bool backwards,bool includeSelection) {
     navigationBackwards_=backwards;navigationWrapped_=false;navigationFound_=false;
     navigationCaret_=send(SCI_GETCURRENTPOS);navigationAnchor_=send(SCI_GETANCHOR);
-    navigationOrigin_=send(backwards || includeSelection?SCI_GETSELECTIONSTART:SCI_GETSELECTIONEND);
-    navigationAt_=navigationOrigin_;navigationLimit_=backwards?0:send(SCI_GETLENGTH);navigating_=true;
+    navigationOrigin_=qBound<sptr_t>(searchStart_,send(backwards || includeSelection?SCI_GETSELECTIONSTART:SCI_GETSELECTIONEND),searchEnd_);
+    navigationAt_=navigationOrigin_;navigationLimit_=backwards?searchStart_:searchEnd_;navigating_=true;
     advanceNavigation();
     if(navigating_)searchTimer_.start();
     return navigating_ || navigationFound_;
@@ -422,7 +466,7 @@ bool CodeEditor::beginNavigation(bool backwards,bool includeSelection) {
 
 void CodeEditor::advanceNavigation() {
     QElapsedTimer timer;timer.start();
-    const auto length=send(SCI_GETLENGTH);
+    const auto length=searchEnd_;
     do {
         bool done=false;
         const auto pos=searchChunk(navigationAt_,navigationLimit_,navigationBackwards_,done);
@@ -432,14 +476,16 @@ void CodeEditor::advanceNavigation() {
             send(SCI_SETSEL,pos,end);send(SCI_SCROLLCARET);emit searchChanged();return;
         }
         if(done) {
-            if(navigationWrapped_ || navigationOrigin_==(navigationBackwards_?length:0)){navigating_=false;return;}
-            navigationWrapped_=true;navigationAt_=navigationBackwards_?length:0;
+            if(navigationWrapped_ || navigationOrigin_==(navigationBackwards_?length:searchStart_)){navigating_=false;return;}
+            navigationWrapped_=true;navigationAt_=navigationBackwards_?length:searchStart_;
             navigationLimit_=navigationBackwards_?navigationOrigin_:length;
         }
     } while(timer.elapsed()<4);
 }
 
 QString CodeEditor::matchSummary() const {
+    if(!searchError_.isEmpty())return searchError_;
+    if(stopped_)return QStringLiteral("已取消 · %1 项").arg(matches_.size());
     if (query_.isEmpty()) return QStringLiteral("输入关键词");
     if (matches_.isEmpty()) return searchBusy() ? QStringLiteral("搜索中…") : QStringLiteral("无结果");
     const auto position=send(SCI_GETSELECTIONSTART);
