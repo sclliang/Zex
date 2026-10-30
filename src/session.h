@@ -18,6 +18,7 @@ struct SessionTab {
     QString path;
     ReadingPosition position;
     QString encoding = "auto";
+    bool pinned = false;
 };
 
 struct SessionSnapshot {

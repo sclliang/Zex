@@ -2,6 +2,7 @@
 #include "theme.h"
 #include "appearancedialog.h"
 #include "fileicons.h"
+#include "filepicker.h"
 #include "integrationdialog.h"
 #include "windowplacement.h"
 #include <QtConcurrentRun>
@@ -75,7 +76,7 @@ FilePage::FilePage(const QString& filename, QWidget* parent) : QWidget(parent), 
     connect(cancel_,&QToolButton::clicked,this,&FilePage::cancelLoad);connect(retry_,&QPushButton::clicked,this,&FilePage::reload);
 }
 
-FilePage::~FilePage() { if(control_)control_->canceled.store(true); }
+FilePage::~FilePage() { if(control_)control_->canceled.store(true);if(followControl_)followControl_->canceled.store(true); }
 
 void FilePage::updateLoadProgress() {
     if(!loading || !control_)return;
@@ -98,6 +99,7 @@ void FilePage::cancelLoad() {
 void FilePage::ensureEditor() {
     if (editor) return;
     editor = new CodeEditor; editor->setAppearance(appearance_); editor->setWordWrap(wrap_); stack_->addWidget(editor);
+    connect(editor,&CodeEditor::verticalPositionChanged,this,&FilePage::trackFollowPosition);
     emit editorCreated();
 }
 void FilePage::setAppearance(const EditorAppearance& appearance) { appearance_=appearance; if(editor)editor->setAppearance(appearance); }
@@ -116,11 +118,13 @@ void FilePage::applyPendingPosition() {
     editor->restoreReadingPosition(*pendingPosition_); pendingPosition_.reset();
 }
 void FilePage::activate() {
+    if(following_){pollFollow();return;}
     if(!attempted)reload();
     else if(ready)QTimer::singleShot(0,this,&FilePage::applyPendingPosition);
 }
 
 void FilePage::reload() {
+    if(following_)setFollowing(false);
     if (loading) return;
     if(ready && !pendingPosition_)pendingPosition_=editor->readingPosition();
     ensureEditor(); loading = true; attempted = true;canceled_=false;committing_=false;
@@ -166,6 +170,9 @@ FileTabs::FileTabs(QWidget* parent) : QTabBar(parent) {
     setSelectionBehaviorOnRemove(QTabBar::SelectPreviousTab);
 }
 QSize FileTabs::tabSizeHint(int index) const { return {qBound(140,fontMetrics().horizontalAdvance(tabText(index))+78,230),39}; }
+bool FileTabs::isPinned(int index) const {
+    auto* page=qobject_cast<FilePage*>(tabData(index).value<QObject*>());return page && page->pinned;
+}
 void FileTabs::paintEvent(QPaintEvent*) {
     QPainter painter(this); painter.setRenderHint(QPainter::Antialiasing);
     for (int i=0; i<count(); ++i) {
@@ -178,17 +185,18 @@ void FileTabs::paintEvent(QPaintEvent*) {
         painter.setPen(active ? Theme::colors().text : Theme::colors().muted);
         auto textRect=rect.adjusted(39,0,-31,0);
         painter.drawText(textRect,Qt::AlignVCenter|Qt::AlignLeft,fontMetrics().elidedText(tabText(i),Qt::ElideMiddle,textRect.width()));
-        if (active || i==hovered_) Theme::icon("close",Theme::colors().muted,16).paint(&painter,QRect(rect.right()-25,rect.top()+12,16,16));
+        if(isPinned(i))Theme::icon("pin",Theme::colors().accent,16).paint(&painter,QRect(rect.right()-25,rect.top()+12,16,16));
+        else if (active || i==hovered_) Theme::icon("close",Theme::colors().muted,16).paint(&painter,QRect(rect.right()-25,rect.top()+12,16,16));
     }
 }
 void FileTabs::mousePressEvent(QMouseEvent* event) {
     auto index=tabAt(event->position().toPoint());
-    if (event->button()==Qt::LeftButton && index>=0 && event->position().x()>=tabRect(index).right()-30) { closePressed_=index; event->accept(); return; }
+    if (event->button()==Qt::LeftButton && index>=0 && !isPinned(index) && event->position().x()>=tabRect(index).right()-30) { closePressed_=index; event->accept(); return; }
     closePressed_=-1; QTabBar::mousePressEvent(event);
 }
 void FileTabs::mouseReleaseEvent(QMouseEvent* event) {
     auto index=tabAt(event->position().toPoint());
-    if (index>=0 && (event->button()==Qt::MiddleButton || (event->button()==Qt::LeftButton && closePressed_==index && event->position().x()>=tabRect(index).right()-30))) {
+    if (index>=0 && !isPinned(index) && (event->button()==Qt::MiddleButton || (event->button()==Qt::LeftButton && closePressed_==index && event->position().x()>=tabRect(index).right()-30))) {
         closePressed_=-1; emit tabCloseRequested(index); return;
     }
     closePressed_=-1; QTabBar::mouseReleaseEvent(event);
@@ -204,32 +212,41 @@ MainWindow::MainWindow(bool testMode, const QString& sessionFile) : settings_("s
     wrap_=testMode ? false : settings_.value("wordWrap",false).toBool();
     appearance_=testMode ? EditorAppearance::defaults() : EditorAppearance::fromSettings(settings_);
     FileIcons::setTheme(testMode ? "material" : settings_.value("iconTheme","material").toString());
-    if (!testMode) recent_=settings_.value("recentFiles").toStringList();
+    if (!testMode) recent_=settings_.value("recentFiles").toStringList().mid(0,50);
     auto* shell = new QWidget; shell->setObjectName("shell"); setCentralWidget(shell);
     auto* root = new QVBoxLayout(shell); root->setContentsMargins(0,0,0,0); root->setSpacing(0);
     buildTitleBar(root);
     auto* strip = new QWidget; strip->setObjectName("tabstrip");
     auto* stripLayout=new QHBoxLayout(strip); stripLayout->setContentsMargins(0,0,7,0); stripLayout->setSpacing(2);
     tabs_=new FileTabs; stripLayout->addWidget(tabs_,1);
+    allTabsButton_=tool(strip,"down",QStringLiteral("全部标签"));allTabsButton_->setObjectName("allTabsButton");stripLayout->addWidget(allTabsButton_);
+    connect(allTabsButton_,&QToolButton::clicked,this,[this]{showFilePicker(true);});
     auto* open=tool(strip,"plus",QStringLiteral("打开文件 (Ctrl+O)")); stripLayout->addWidget(open);
     auto* find=tool(strip,"search",QStringLiteral("搜索 (Ctrl+F)")); stripLayout->addWidget(find);
+    auto* switchFile=tool(strip,"files",QStringLiteral("快速切换文件 (Ctrl+P)"));stripLayout->addWidget(switchFile);
+    connect(switchFile,&QToolButton::clicked,this,[this]{showFilePicker();});
     root->addWidget(strip);
     connect(open,&QToolButton::clicked,this,&MainWindow::openFiles);
     connect(find,&QToolButton::clicked,this,&MainWindow::showSearch);
     connect(tabs_,&QTabBar::currentChanged,this,&MainWindow::selectTab);
     connect(tabs_,&QTabBar::tabCloseRequested,this,&MainWindow::closeTab);
-    connect(tabs_,&QTabBar::tabMoved,this,[this]{scheduleSessionSave();});
+    connect(tabs_,&QTabBar::tabMoved,this,[this]{normalizePinnedTabs();scheduleSessionSave();});
     tabs_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(tabs_,&QWidget::customContextMenuRequested,this,[this](QPoint point) {
         int index=tabs_->tabAt(point); if(index<0) return;
         QMenu menu(this);
+        auto* pin=menu.addAction(isTabPinned(index)?QStringLiteral("取消固定标签"):QStringLiteral("固定标签"));menu.addSeparator();
         auto* close=menu.addAction(QStringLiteral("关闭标签"));
+        close->setEnabled(!isTabPinned(index));
         auto* others=menu.addAction(QStringLiteral("关闭其他标签"));
+        auto* right=menu.addAction(QStringLiteral("关闭右侧标签"));
         auto* all=menu.addAction(QStringLiteral("关闭全部标签"));
         menu.addSeparator(); auto* copy=menu.addAction(QStringLiteral("复制完整路径"));
         auto* chosen=menu.exec(tabs_->mapToGlobal(point));
-        if(chosen==close) closeTab(index);
-        else if(chosen==others) { for(int i=tabs_->count()-1;i>=0;--i) if(i!=index) removeTab(i,false);selectTab(0); }
+        if(chosen==pin)setTabPinned(index,!isTabPinned(index));
+        else if(chosen==close) closeTab(index);
+        else if(chosen==others)closeOtherTabs(index);
+        else if(chosen==right)closeTabsToRight(index);
         else if(chosen==all) closeAllTabs();
         else if(chosen==copy) { if(auto* p=pageAt(index)) QApplication::clipboard()->setText(QDir::toNativeSeparators(p->path)); }
     });
@@ -241,6 +258,8 @@ MainWindow::MainWindow(bool testMode, const QString& sessionFile) : settings_("s
     pathLayout->addWidget(pathLabel_,1);
     reloadButton_=new QToolButton; reloadButton_->setText(QStringLiteral("文件已变化 · 重新载入")); reloadButton_->hide();
     pathLayout->addWidget(reloadButton_); connect(reloadButton_,&QToolButton::clicked,this,[this]{if(auto* p=currentPage())p->reload();});
+    followButton_=new QToolButton;followButton_->setObjectName("followFileButton");followButton_->setText(QStringLiteral("跟随文件"));followButton_->setCheckable(true);followButton_->setToolTip(QStringLiteral("自动读取日志新增内容；向上滚动暂停，回到底部继续"));followButton_->setAccessibleName(QStringLiteral("跟随文件"));pathLayout->addWidget(followButton_);
+    connect(followButton_,&QToolButton::toggled,this,[this](bool on){if(auto* page=currentPage())page->setFollowing(on);});
     wrapButton_=tool(breadcrumb,"wrap",QStringLiteral("自动换行 (Alt+Z)")); wrapButton_->setCheckable(true); wrapButton_->setChecked(wrap_);
     pathLayout->addWidget(wrapButton_); connect(wrapButton_,&QToolButton::toggled,this,&MainWindow::setWrap);
     root->addWidget(breadcrumb);
@@ -271,7 +290,7 @@ MainWindow::MainWindow(bool testMode, const QString& sessionFile) : settings_("s
     auto* status=new QWidget; status->setObjectName("statusbar"); status->setFixedHeight(28);
     auto* statusLayout=new QHBoxLayout(status); statusLayout->setContentsMargins(10,0,9,0); statusLayout->setSpacing(4);
     auto* lock=glyphLabel("lock","muted",14);statusLayout->addWidget(lock);
-    statusLayout->addWidget(label(QStringLiteral("只读"),"status")); fileInfo_=label("Zex 0.5.2","status"); statusLayout->addWidget(fileInfo_);
+    statusLayout->addWidget(label(QStringLiteral("只读"),"status")); fileInfo_=label("Zex 0.6.0","status"); statusLayout->addWidget(fileInfo_);
     encodingButton_=new QToolButton;encodingButton_->setObjectName("encodingButton");encodingButton_->setPopupMode(QToolButton::InstantPopup);encodingButton_->setMenu(encodingMenu_);encodingButton_->setAccessibleName(QStringLiteral("文件编码"));statusLayout->addWidget(encodingButton_);
     sessionNotice_=label(QStringLiteral("会话未保存"),"sessionNotice");sessionNotice_->hide();statusLayout->addWidget(sessionNotice_);
     statusLayout->addStretch(); position_=label({},"status"); language_=label({},"status"); statusLayout->addWidget(position_); statusLayout->addWidget(language_);
@@ -280,6 +299,7 @@ MainWindow::MainWindow(bool testMode, const QString& sessionFile) : settings_("s
     connect(&sessionSaveTimer_,&QTimer::timeout,this,&MainWindow::saveSession);
 
     auto shortcut=[this](const QKeySequence& key, auto action){auto* s=new QShortcut(key,this);connect(s,&QShortcut::activated,this,action);};
+    shortcut(QKeySequence("Ctrl+P"),[this]{showFilePicker();});
     shortcut(QKeySequence::Open,[this]{openFiles();});
     shortcut(QKeySequence::Find,[this]{showSearch();});
     shortcut(QKeySequence("Ctrl+W"),[this]{closeTab(tabs_->currentIndex());});
@@ -299,7 +319,7 @@ MainWindow::MainWindow(bool testMode, const QString& sessionFile) : settings_("s
     shortcut(QKeySequence("Escape"),[this]{hideSearch();});
     for(int i=1;i<=9;++i) shortcut(QKeySequence(QString("Alt+%1").arg(i)),[this,i]{if(tabs_->count())tabs_->setCurrentIndex(qMin(i-1,tabs_->count()-1));});
     connect(&fileWatcher_,&QFileSystemWatcher::fileChanged,this,[this](const QString& path){
-        for(int i=0;i<tabs_->count();++i) if(auto* p=pageAt(i);p && p->path==path){p->stale=true;if(p==currentPage())refreshStatus();}
+        for(int i=0;i<tabs_->count();++i) if(auto* p=pageAt(i);p && p->path==path && !p->following()){p->stale=true;if(p==currentPage())refreshStatus();}
     });
     if(!testMode && settings_.contains("geometry")) {
         restoreGeometry(settings_.value("geometry").toByteArray());
@@ -331,6 +351,7 @@ void MainWindow::buildTitleBar(QVBoxLayout* root) {
 void MainWindow::buildMenus(QToolButton* file, QToolButton* view, QToolButton* help) {
     auto* files=new QMenu(this);file->setMenu(files);
     files->addAction(QStringLiteral("打开文件…\tCtrl+O"),this,&MainWindow::openFiles);
+    files->addAction(QStringLiteral("快速切换文件…\tCtrl+P"),this,[this]{showFilePicker();});
     recentMenu_=files->addMenu(QStringLiteral("最近打开"));connect(recentMenu_,&QMenu::aboutToShow,this,&MainWindow::updateRecentMenu);
     files->addSeparator();files->addAction(QStringLiteral("重新载入\tF5"),this,[this]{if(auto* p=currentPage())p->reload();});
     encodingMenu_=files->addMenu(QStringLiteral("以编码重新打开"));encodingMenu_->setObjectName("encodingMenu");
@@ -348,6 +369,7 @@ void MainWindow::buildMenus(QToolButton* file, QToolButton* view, QToolButton* h
     views->addAction(QStringLiteral("搜索…\tCtrl+F"),this,&MainWindow::showSearch);
     views->addAction(QStringLiteral("跳转到行…\tCtrl+G"),this,&MainWindow::jumpToLine);views->addSeparator();
     wrapAction_=views->addAction(QStringLiteral("自动换行\tAlt+Z"));wrapAction_->setCheckable(true);wrapAction_->setChecked(wrap_);connect(wrapAction_,&QAction::toggled,this,&MainWindow::setWrap);
+    followAction_=views->addAction(QStringLiteral("跟随文件"));followAction_->setCheckable(true);connect(followAction_,&QAction::toggled,this,[this](bool on){if(auto* page=currentPage())page->setFollowing(on);});
     views->addAction(QStringLiteral("放大字体\tCtrl++"),this,[this]{changeFont(1);});
     views->addAction(QStringLiteral("缩小字体\tCtrl+-"),this,[this]{changeFont(-1);});
     views->addAction(QStringLiteral("重置字号\tCtrl+0"),this,[this]{appearance_.points=12;changeFont(0);});
@@ -355,8 +377,8 @@ void MainWindow::buildMenus(QToolButton* file, QToolButton* view, QToolButton* h
     views->addAction(QStringLiteral("外观设置…\tCtrl+,"),this,&MainWindow::showAppearanceSettings);
     views->addAction(QStringLiteral("Windows 集成…"),this,[this]{IntegrationDialog dialog(ShellIntegration(QCoreApplication::applicationFilePath()),this);dialog.exec();});
     auto* helps=new QMenu(this);help->setMenu(helps);
-    helps->addAction(QStringLiteral("快捷键"),this,[this]{QMessageBox::information(this,QStringLiteral("Zex · 快捷键"),QStringLiteral("Ctrl+O    打开一个或多个文件\nCtrl+F    搜索当前文件\nEnter / Shift+Enter    下一个 / 上一个结果\nF3 / Shift+F3    下一个 / 上一个结果\nEsc    关闭搜索\nCtrl+G    跳转到行\nCtrl+W / 鼠标中键    关闭标签\nCtrl+Shift+T    恢复标签\nCtrl+Tab / Ctrl+Shift+Tab    切换标签\nAlt+1 … Alt+9    切换到指定标签\nAlt+Z    自动换行\nCtrl++ / Ctrl+- / Ctrl+0    调整字号\nCtrl+,    外观设置\nF5    重新载入文件\n\n支持拖入文件和拖动标签排序。"));});
-    helps->addAction(QStringLiteral("关于 Zex"),this,[this]{QMessageBox::about(this,QStringLiteral("关于 Zex"),QStringLiteral("<h2>Zex <small>0.5.2</small></h2><p>专注于文件与代码的桌面阅读器。</p><p>C++ · Qt 6 · Scintilla · Lexilla</p><p>Copyright (c) 2026 sixunited.<br>Author: sclliang</p><p>本版本支持只读查看，不会修改打开的文件。<br>开源组件许可位于 bin/licenses。</p>"));});
+    helps->addAction(QStringLiteral("快捷键"),this,[this]{QMessageBox::information(this,QStringLiteral("Zex · 快捷键"),QStringLiteral("Ctrl+O    打开一个或多个文件\nCtrl+P    快速切换文件\nCtrl+F    搜索当前文件\nEnter / Shift+Enter    下一个 / 上一个结果\nF3 / Shift+F3    下一个 / 上一个结果\nEsc    关闭搜索\nCtrl+G    跳转到行\nCtrl+W / 鼠标中键    关闭标签\nCtrl+Shift+T    恢复标签\nCtrl+Tab / Ctrl+Shift+Tab    切换标签\nAlt+1 … Alt+9    切换到指定标签\nAlt+Z    自动换行\nCtrl++ / Ctrl+- / Ctrl+0    调整字号\nCtrl+,    外观设置\nF5    重新载入文件\n\n支持拖入文件、拖动标签排序；右键标签可固定、关闭右侧。固定标签需先取消固定才能关闭。"));});
+    helps->addAction(QStringLiteral("关于 Zex"),this,[this]{QMessageBox::about(this,QStringLiteral("关于 Zex"),QStringLiteral("<h2>Zex <small>0.6.0</small></h2><p>专注于文件与代码的桌面阅读器。</p><p>C++ · Qt 6 · Scintilla · Lexilla</p><p>Copyright (c) 2026 sixunited.<br>Author: sclliang</p><p>本版本支持只读查看，不会修改打开的文件。<br>开源组件许可位于 bin/licenses。</p>"));});
 }
 
 QWidget* MainWindow::buildWelcome() {
@@ -388,9 +410,10 @@ FilePage* MainWindow::currentPage() const {return pageAt(tabs_->currentIndex());
 int MainWindow::tabCount() const {return tabs_->count();}
 bool MainWindow::allLoaded() const {for(int i=0;i<tabs_->count();++i)if(auto* p=pageAt(i);p&&p->loading)return false;return true;}
 
-FilePage* MainWindow::addPage(const QString& path, const ReadingPosition& position,const QString& encoding) {
+FilePage* MainWindow::addPage(const QString& path, const ReadingPosition& position,const QString& encoding,bool pinned) {
     auto* page=new FilePage(path,pages_);page->setAppearance(appearance_);page->setWordWrap(wrap_);page->setReadingPosition(position);pages_->addWidget(page);
     page->setEncoding(encoding);
+    page->pinned=pinned;
     // Adding the first tab emits currentChanged before tabData is assigned; activate only after setup.
     const QSignalBlocker blocker(tabs_);
     int index=tabs_->addTab(Theme::fileIcon(path),QFileInfo(path).fileName());
@@ -398,7 +421,7 @@ FilePage* MainWindow::addPage(const QString& path, const ReadingPosition& positi
     connect(page,&FilePage::loaded,this,[this,page]{
         if(page->ready) {
             if(!fileWatcher_.files().contains(page->path))fileWatcher_.addPath(page->path);
-            recent_.removeAll(page->path);recent_.prepend(page->path);recent_=recent_.mid(0,12);
+            recent_.removeAll(page->path);recent_.prepend(page->path);recent_=recent_.mid(0,50);
         }
         if(page==currentPage()){refreshStatus();if(searchbar_->isVisible()){const auto position=page->readingPosition();runSearch();if(page->ready)page->editor->restoreReadingPosition(position);updateSearchLabel();}}
         scheduleSessionSave();
@@ -411,6 +434,7 @@ FilePage* MainWindow::addPage(const QString& path, const ReadingPosition& positi
         connect(page->editor,&CodeEditor::fileDropped,this,[this](const QString& p){openPath(p);});
     });
     connect(page,&FilePage::loadingChanged,this,[this,page]{if(page==currentPage())refreshStatus();scheduleSessionSave();});
+    connect(page,&FilePage::followingChanged,this,[this,page]{if(page==currentPage())refreshStatus();scheduleSessionSave();});
     return page;
 }
 
@@ -445,7 +469,8 @@ void MainWindow::restoreLastSession(const QStringList& startupFiles) {
     restoringSession_=true;
     const auto session=sessionStore_.read();
     QString active=session.activePath;
-    for(const auto& tab:session.tabs)addPage(tab.path,tab.position,tab.encoding);
+    for(const auto& tab:session.tabs)addPage(tab.path,tab.position,tab.encoding,tab.pinned);
+    normalizePinnedTabs();
     for(const auto& filename:startupFiles) {
         const auto path=normalized(filename);bool exists=false;
         for(int i=0;i<tabs_->count();++i)if(pageAt(i)->path.compare(path,Qt::CaseInsensitive)==0){exists=true;break;}
@@ -461,7 +486,7 @@ void MainWindow::restoreLastSession(const QStringList& startupFiles) {
 
 SessionSnapshot MainWindow::sessionSnapshot() const {
     SessionSnapshot session;
-    for(int i=0;i<tabs_->count();++i)if(auto* page=pageAt(i))session.tabs.append({page->path,page->readingPosition(),page->encoding()});
+    for(int i=0;i<tabs_->count();++i)if(auto* page=pageAt(i))session.tabs.append({page->path,page->readingPosition(),page->encoding(),page->pinned});
     if(auto* page=currentPage())session.activePath=page->path;
     return session;
 }
@@ -477,8 +502,32 @@ bool MainWindow::saveSession() {
     return saved;
 }
 
-void MainWindow::closeTab(int index) { removeTab(index,true); }
-void MainWindow::closeAllTabs() { while(tabs_->count())removeTab(tabs_->count()-1,false); }
+bool MainWindow::isTabPinned(int index) const {auto* page=pageAt(index);return page && page->pinned;}
+void MainWindow::normalizePinnedTabs() {
+    const QSignalBlocker blocker(tabs_);auto* active=currentPage();QVector<FilePage*> order;
+    for(bool pinned:{true,false})for(int i=0;i<tabs_->count();++i)if(pageAt(i)->pinned==pinned)order.append(pageAt(i));
+    for(int i=0;i<order.size();++i)for(int j=i;j<tabs_->count();++j)if(pageAt(j)==order[i]){if(j!=i)tabs_->moveTab(j,i);break;}
+    for(int i=0;i<tabs_->count();++i)if(pageAt(i)==active){tabs_->setCurrentIndex(i);break;}
+    tabs_->update();
+}
+void MainWindow::setTabPinned(int index,bool pinned) {
+    if(auto* page=pageAt(index)){page->pinned=pinned;normalizePinnedTabs();scheduleSessionSave();}
+}
+void MainWindow::closeTab(int index) { if(!isTabPinned(index))removeTab(index,true); }
+void MainWindow::closeAllTabs() {
+    for(int i=tabs_->count()-1;i>=0;--i)if(!isTabPinned(i))removeTab(i,false);
+    if(tabs_->count())selectTab(tabs_->currentIndex());
+}
+void MainWindow::closeOtherTabs(int index) {
+    auto* keep=pageAt(index);if(!keep)return;
+    for(int i=tabs_->count()-1;i>=0;--i)if(pageAt(i)!=keep && !isTabPinned(i))removeTab(i,false);
+    for(int i=0;i<tabs_->count();++i)if(pageAt(i)==keep){tabs_->setCurrentIndex(i);selectTab(i);break;}
+}
+void MainWindow::closeTabsToRight(int index) {
+    if(!pageAt(index))return;
+    for(int i=tabs_->count()-1;i>index;--i)if(!isTabPinned(i))removeTab(i,false);
+    selectTab(tabs_->currentIndex());
+}
 void MainWindow::removeTab(int index, bool activateNext) {
     auto* page=pageAt(index);if(!page)return;
     const QSignalBlocker blocker(tabs_);
@@ -504,7 +553,22 @@ void MainWindow::openFiles() {
     if(!files.isEmpty()&&!testMode_)settings_.setValue("lastDirectory",QFileInfo(files.first()).absolutePath());
 }
 
+void MainWindow::showFilePicker(bool tabsOnly) {
+    QVector<FileChoice> opened;
+    for(int i=0;i<tabs_->count();++i)if(auto* page=pageAt(i))opened.append({page->path,true,page->pinned});
+    FilePickerDialog dialog(mergeFileChoices(opened,tabsOnly?QStringList{}:recent_),tabsOnly,this);
+    QRect frame(QPoint(),dialog.size());
+    if(tabsOnly)frame.moveTopRight(allTabsButton_->mapToGlobal(QPoint(allTabsButton_->width(),allTabsButton_->height()+4)));
+    else frame.moveTopLeft(mapToGlobal(QPoint((width()-dialog.width())/2,qMin(110,height()/5))));
+    dialog.setGeometry(WindowPlacement::fit(frame,{screen()->availableGeometry()}));
+    if(dialog.exec()==QDialog::Accepted)openPath(dialog.selectedPath());
+    else if(auto* page=currentPage();page && page->editor)page->editor->setFocus();
+}
+
 void MainWindow::refreshStatus() {
+    {const QSignalBlocker button(followButton_),action(followAction_);auto* page=currentPage();
+        followButton_->setVisible(page!=nullptr);followButton_->setEnabled(page && !page->loading);followAction_->setEnabled(page && !page->loading);
+        followButton_->setChecked(page && page->following());followAction_->setChecked(page && page->following());}
     if(auto* page=currentPage()) {
         encodingButton_->show();encodingButton_->setText((page->loading?textEncodingName(page->encoding())+QStringLiteral("…"):page->ready?page->content.encoding:textEncodingName(page->encoding()))+QStringLiteral(" ▾"));
         encodingButton_->setToolTip(QStringLiteral("%1 · 点击选择编码并重新读取文件").arg(textEncodingName(page->encoding())));
@@ -518,7 +582,7 @@ void MainWindow::refreshStatus() {
     } else {
         encodingButton_->hide();
         fileIcon_->setPixmap(Theme::icon("file",Theme::colors().subtle).pixmap(QSize(18,18),devicePixelRatioF()));
-        title_->setText("Zex");setWindowTitle("Zex");pathLabel_->setText(QStringLiteral("文件阅读器"));pathLabel_->setToolTip({});reloadButton_->hide();fileInfo_->setText("Zex 0.5.2");position_->clear();language_->clear();
+        title_->setText("Zex");setWindowTitle("Zex");pathLabel_->setText(QStringLiteral("文件阅读器"));pathLabel_->setToolTip({});reloadButton_->hide();fileInfo_->setText("Zex 0.6.0");position_->clear();language_->clear();
     }
 }
 
@@ -592,7 +656,7 @@ void MainWindow::jumpToLine() {
 void MainWindow::reopenClosed() {if(!closed_.isEmpty())openPath(closed_.takeLast());}
 void MainWindow::updateRecentMenu() {
     recentMenu_->clear();if(recent_.isEmpty()){recentMenu_->addAction(QStringLiteral("暂无最近文件"))->setEnabled(false);return;}
-    for(const auto& path:recent_){auto* a=recentMenu_->addAction(Theme::fileIcon(path),QFileInfo(path).fileName());a->setToolTip(path);connect(a,&QAction::triggered,this,[this,path]{openPath(path);});}
+    for(const auto& path:recent_.mid(0,12)){auto* a=recentMenu_->addAction(Theme::fileIcon(path),QFileInfo(path).fileName());a->setToolTip(path);connect(a,&QAction::triggered,this,[this,path]{openPath(path);});}
 }
 void MainWindow::toggleMaximize() {isMaximized()?showNormal():showMaximized();}
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {if(event->mimeData()->hasUrls())event->acceptProposedAction();}

@@ -2,7 +2,19 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QStringDecoder>
-#include <QTextCodec>
+#include <windows.h>
+#include <limits>
+
+QString decodeLegacyText(QByteArrayView bytes,const QString& encoding,bool& valid) {
+    valid=true;if(bytes.isEmpty())return {};
+    if(bytes.size()>std::numeric_limits<int>::max()){valid=false;return {};}
+    const UINT codepage=encoding=="gbk"?936:54936;
+    const int count=MultiByteToWideChar(codepage,MB_ERR_INVALID_CHARS,bytes.data(),int(bytes.size()),nullptr,0);
+    if(count<=0){valid=false;return {};}
+    QString text(count,Qt::Uninitialized);
+    valid=MultiByteToWideChar(codepage,MB_ERR_INVALID_CHARS,bytes.data(),int(bytes.size()),reinterpret_cast<LPWSTR>(text.data()),count)==count;
+    return valid?text:QString{};
+}
 
 QStringList textEncodingIds() { return {"auto","utf-8","gb18030","gbk","utf-16le","utf-16be","utf-32le","utf-32be"}; }
 QString normalizedTextEncoding(const QString& encoding) { return textEncodingIds().contains(encoding)?encoding:"auto"; }
@@ -36,12 +48,9 @@ FileContent decodeFile(const QByteArray& bytes,const QString& requested,const Lo
         if (decoder.hasError()) result.error = QStringLiteral("文件包含无效的 %1 字符序列。").arg(name);
     };
     auto decodeLegacy=[&](const QString& id) {
-        QTextCodec::ConverterState state;
-        auto* codec=QTextCodec::codecForName(id=="gbk"?"GBK":"GB18030");
         result.encoding=textEncodingName(id);
-        if(!codec){result.error=QStringLiteral("无法加载 %1 编码支持。").arg(result.encoding);return;}
-        text=codec->toUnicode(bytes.constData(),bytes.size(),&state);
-        if(state.invalidChars || state.remainingChars)result.error=QStringLiteral("文件包含无效或不完整的 %1 字符。请尝试其他编码。").arg(result.encoding);
+        bool valid=false;text=decodeLegacyText(bytes,id,valid);
+        if(!valid)result.error=QStringLiteral("文件包含无效或不完整的 %1 字符。请尝试其他编码。").arg(result.encoding);
     };
     QString bom;
     if(bytes.startsWith(QByteArray::fromHex("fffe0000")))bom="utf-32le";

@@ -25,9 +25,14 @@
 #include "Document.h"
 
 PreparedFile prepareFile(const QString& path,const QString& encoding,const LoadControlPtr& control) {
+    try { return prepareDocument(readFile(path,encoding,control),control); }
+    catch(...) { PreparedFile result;result.content.error=QStringLiteral("无法读取文件，可能没有足够的内存。");return result; }
+}
+
+PreparedFile prepareDocument(FileContent content,const LoadControlPtr& control) {
     PreparedFile result;
     try {
-        result.content=readFile(path,encoding,control);
+        result.content=std::move(content);
         if(result.content.canceled || !result.content.error.isEmpty())return result;
         control->update(LoadStage::Preparing,70);
         const auto& bytes=result.content.utf8;

@@ -3,6 +3,7 @@
 #include "theme.h"
 #include "appearancedialog.h"
 #include "fileicons.h"
+#include "filepicker.h"
 #include "filereceiver.h"
 #include "integrationdialog.h"
 #include "windowplacement.h"
@@ -13,6 +14,7 @@
 #include <QCheckBox>
 #include <QFontComboBox>
 #include <QLineEdit>
+#include <QListView>
 #include <QLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -20,6 +22,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QScreen>
+#include <QSaveFile>
 #include <QProgressBar>
 #include <QToolButton>
 #include <QtConcurrentRun>
@@ -41,6 +44,150 @@ struct RegistrySandbox {
 class ZexTests : public QObject {
     Q_OBJECT
 private slots:
+    void logReaderEncodingBoundaries_data() {
+        QTest::addColumn<QString>("encoding");
+        for(const auto& id:textEncodingIds())if(id!="auto")QTest::newRow(qPrintable(id))<<id;
+    }
+    void logReaderEncodingBoundaries() {
+        QFETCH(QString,encoding);QTemporaryDir directory;const auto path=directory.filePath("stream.log");
+        auto* codec=QTextCodec::codecForName(encoding.toLatin1());QVERIFY(codec);
+        const QString initial=QStringLiteral("header\r\n");const QString addition=encoding=="gbk"?QStringLiteral("中文\r\n尾部"):QStringLiteral("中文🙂\r\n尾部");
+        QTextCodec::ConverterState state(QTextCodec::IgnoreHeader);
+        const auto first=codec->fromUnicode(initial.constData(),initial.size(),&state);
+        const auto extra=codec->fromUnicode(addition.constData(),addition.size(),&state);
+        QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));file.write(first);file.close();
+        LogReader reader(encoding);auto control=std::make_shared<LoadControl>();auto update=reader.poll(path,control);
+        QVERIFY2(!update.failed,qPrintable(update.notice));QVERIFY(update.reset);QVERIFY(update.replacement.document);
+        CodeEditor editor;editor.setPreparedContent(update.replacement,path);
+        for(char byte:extra) {
+            QVERIFY(file.open(QIODevice::Append));file.write(&byte,1);file.close();update=reader.poll(path,control);
+            QVERIFY2(!update.failed,qPrintable(update.notice));QVERIFY(!update.reset);QVERIFY(editor.appendLogText(update.appended,path,false));
+        }
+        const auto expected=(initial+addition).toUtf8();
+        QCOMPARE(decodeFile(first+extra,encoding).utf8,expected);
+        QCOMPARE(QByteArray(reinterpret_cast<const char*>(editor.send(SCI_GETCHARACTERPOINTER)),editor.send(SCI_GETLENGTH)),expected);
+        QCOMPARE(update.content.lineEnding,QString("CRLF"));QCOMPARE(editor.send(SCI_GETREADONLY),sptr_t(1));
+        QVERIFY(file.open(QIODevice::ReadOnly));QCOMPARE(file.readAll(),first+extra);
+    }
+    void logReaderRotationTruncationAndPartialInitial() {
+        QTemporaryDir directory;const auto path=directory.filePath("日志.log");
+        auto write=[&](const QByteArray& bytes){QFile f(path);if(!f.open(QIODevice::WriteOnly))return false;return f.write(bytes)==bytes.size();};
+        const auto chinese=QStringLiteral("中").toUtf8();QVERIFY(write("first\n"+chinese.left(1)));
+        LogReader reader("auto");auto control=std::make_shared<LoadControl>();auto update=reader.poll(path,control);QVERIFY(update.reset && update.replacement.document);QCOMPARE(update.content.encoding,QString("UTF-8"));
+        CodeEditor editor;editor.setPreparedContent(update.replacement,path);QCOMPARE(editor.send(SCI_GETLENGTH),sptr_t(6));
+        QFile file(path);QVERIFY(file.open(QIODevice::Append));file.write(chinese.mid(1));file.close();update=reader.poll(path,control);QVERIFY(!update.reset);QCOMPARE(update.appended,chinese);
+        QVERIFY(write("x"));update=reader.poll(path,control);QVERIFY(update.reset && update.replacement.document);
+        const auto bytes=QByteArray(12000,'a');QVERIFY(write(bytes));update=reader.poll(path,control);QVERIFY(update.reset);
+        QSaveFile rotated(path);QVERIFY(rotated.open(QIODevice::WriteOnly));auto replaced=bytes;replaced[6000]='b';rotated.write(replaced);QVERIFY(rotated.commit());
+        update=reader.poll(path,control);QVERIFY(update.reset);editor.setPreparedContent(update.replacement,path);QCOMPARE(editor.send(SCI_GETCHARAT,6000),sptr_t('b'));
+        QVERIFY(QFile::remove(path));update=reader.poll(path,control);QVERIFY(update.waiting);QVERIFY(!update.failed);
+        QVERIFY(write("returned\n"));update=reader.poll(path,control);QVERIFY(update.reset);
+        QVERIFY(write({}));update=reader.poll(path,control);QVERIFY(update.reset && update.replacement.document);editor.setPreparedContent(update.replacement,path);QCOMPARE(editor.send(SCI_GETLENGTH),sptr_t(0));
+        const auto resumed=QStringLiteral("中文🙂\n");auto* utf16=QTextCodec::codecForName("UTF-16LE");QVERIFY(write(utf16->fromUnicode(resumed)));
+        update=reader.poll(path,control);QVERIFY(update.reset);QCOMPARE(update.content.encoding,QString("UTF-16 LE"));editor.setPreparedContent(update.replacement,path);
+        QCOMPARE(QByteArray(reinterpret_cast<const char*>(editor.send(SCI_GETCHARACTERPOINTER)),editor.send(SCI_GETLENGTH)),resumed.toUtf8());
+        QVERIFY(file.open(QIODevice::ReadWrite));QVERIFY(file.resize(257ll*1024*1024));file.close();update=reader.poll(path,control);QVERIFY(update.failed);QVERIFY(update.notice.contains("256 MiB"));
+        control->canceled.store(true);update=reader.poll(path,control);QVERIFY(!update.replacement.document);QVERIFY(update.appended.isEmpty());
+    }
+    void appendPreservesSelectionAndUpdatesSearchBoundary() {
+        CodeEditor editor;editor.resize(900,500);editor.show();QVERIFY(QTest::qWaitForWindowExposed(&editor));
+        editor.setContent(decodeFile(QByteArray("line\n").repeated(300)+"ERR"),"trace.log");
+        editor.setSearch("ERR",true,true);QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.matchCount(),1);
+        editor.restoreReadingPosition({40,0,0,45,2,45,0});QTest::qWait(40);const auto position=editor.readingPosition();
+        QVERIFY(editor.appendLogText("OR\nERR\n","trace.log",false));QTRY_VERIFY(!editor.searchBusy());QCOMPARE(editor.matchCount(),1);
+        QCOMPARE((SessionSnapshot{{{"C:/trace.log",editor.readingPosition()}}}.serialize()),(SessionSnapshot{{{"C:/trace.log",position}}}.serialize()));QCOMPARE(editor.selectedText(),QString("li"));
+        QVERIFY(editor.appendLogText("ERR","trace.log",false));QTRY_COMPARE(editor.matchCount(),2);
+        QCOMPARE((SessionSnapshot{{{"C:/trace.log",editor.readingPosition()}}}.serialize()),(SessionSnapshot{{{"C:/trace.log",position}}}.serialize()));editor.scrollToEnd();QTRY_VERIFY(editor.atDocumentEnd());QCOMPARE(editor.selectedText(),QString("li"));
+    }
+    void followPauseResumeRotationAndClose() {
+        QTemporaryDir directory;const auto path=directory.filePath("follow.log");QFile file(path);
+        const auto initial=QByteArray("log line\n").repeated(400);QVERIFY(file.open(QIODevice::WriteOnly));file.write(initial);file.close();
+        MainWindow window(true);window.show();auto* page=window.openPath(path);QTRY_VERIFY(page->ready && !page->loading);
+        page->setFollowing(true);QTRY_VERIFY(!page->followBusy());QVERIFY(page->following());QTRY_VERIFY(page->editor->atDocumentEnd());
+        QVERIFY(file.open(QIODevice::Append));file.write("new event\n");file.close();
+        QTRY_COMPARE(page->editor->send(SCI_GETLENGTH),sptr_t(initial.size()+10));QVERIFY(!page->followPaused());
+        page->editor->restoreReadingPosition({40,0,0,44,3,44,0});QTRY_VERIFY(page->followPaused());const auto position=page->readingPosition();
+        QVERIFY(file.open(QIODevice::Append));file.write("paused event\n");file.close();QTest::qWait(650);
+        QVERIFY(page->readingPosition()==position);QCOMPARE(page->editor->send(SCI_GETLENGTH),sptr_t(initial.size()+10));
+        page->resumeFollowing();QTRY_COMPARE(page->editor->send(SCI_GETLENGTH),sptr_t(initial.size()+23));QTRY_VERIFY(page->editor->atDocumentEnd());
+        page->editor->restoreReadingPosition({30,0,0,34,3,34,0});QTRY_VERIFY(page->followPaused());
+        QSaveFile replacement(path);QVERIFY(replacement.open(QIODevice::WriteOnly));replacement.write("rotated\n");QVERIFY(replacement.commit());QTest::qWait(600);
+        QCOMPARE(page->editor->send(SCI_GETLENGTH),sptr_t(initial.size()+23));page->resumeFollowing();QTRY_COMPARE(page->editor->send(SCI_GETLENGTH),sptr_t(8));
+        QVERIFY(QFile::remove(path));QTRY_VERIFY(!page->followNotice().isEmpty());QVERIFY(page->following());QCOMPARE(page->editor->send(SCI_GETLENGTH),sptr_t(8));
+        QVERIFY(file.open(QIODevice::WriteOnly));file.write("back again\n");file.close();QTRY_COMPARE(page->editor->send(SCI_GETLENGTH),sptr_t(11));
+        page->setFollowing(false);QVERIFY(file.open(QIODevice::Append));file.write("stopped\n");file.close();QTest::qWait(600);QCOMPARE(page->editor->send(SCI_GETLENGTH),sptr_t(11));
+        page->setFollowing(true);window.closeTab(0);QCOMPARE(window.tabCount(),0);QTest::qWait(150);window.close();
+        MainWindow reopened(true);reopened.show();auto* ordinary=reopened.openPath(path);QTRY_VERIFY(ordinary->ready && !ordinary->loading);QVERIFY(!ordinary->following());reopened.close();
+    }
+    void filePickerRankingAndKeyboard() {
+        const auto choices=mergeFileChoices({{"C:/alpha/mainwindow.cpp",true,true},{"C:/beta/mainwindow.cpp",true,false},{QStringLiteral("C:/中文/日志.log"),true,false}},
+            {"c:\\ALPHA\\mainwindow.cpp","C:/recent/notes.txt","C:/other/mwc.txt"});
+        QCOMPARE(choices.size(),5);QVERIFY(choices[0].opened);QVERIFY(choices[0].pinned);
+        QCOMPARE(rankFileChoices(choices,"beta mwc"),QVector<int>{1});
+        QCOMPARE(rankFileChoices(choices,QStringLiteral("中文 日志")),QVector<int>{2});
+        QCOMPARE(rankFileChoices(choices,"mwc").first(),4);QVERIFY(rankFileChoices(choices,"absent").isEmpty());
+        FilePickerDialog dialog(choices,false);dialog.show();
+        auto* input=dialog.findChild<QLineEdit*>("filePickerInput");auto* list=dialog.findChild<QListView*>("filePickerList");
+        QCOMPARE(list->model()->rowCount(),5);QTest::keyClick(input,Qt::Key_Down);QCOMPARE(dialog.selectedPath(),choices[1].path);
+        input->setText("notes");QCOMPARE(list->model()->rowCount(),1);QCOMPARE(dialog.selectedPath(),choices[3].path);
+        input->setText("no match");QTest::keyClick(input,Qt::Key_Return);QVERIFY(dialog.isVisible());
+        input->setText("beta mwc");QTest::keyClick(input,Qt::Key_Return);QCOMPARE(dialog.result(),int(QDialog::Accepted));
+        FilePickerDialog empty({},false);empty.show();QTest::keyClick(empty.findChild<QLineEdit*>(),Qt::Key_Escape);QVERIFY(!empty.isVisible());
+    }
+    void followBurstBackgroundAndGeneration() {
+        QTemporaryDir directory;const auto path=directory.filePath("burst.log"),other=directory.filePath("other.txt");
+        const auto initial=QByteArray("line\n").repeated(10000),extra=QStringLiteral("新增🙂 日志\r\n").repeated(90000).toUtf8();
+        QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));file.write(initial);file.close();
+        QFile second(other);QVERIFY(second.open(QIODevice::WriteOnly));second.write("another file\n");second.close();
+        MainWindow window(true);window.show();auto* page=window.openPath(path);QTRY_VERIFY(page->ready && !page->loading);
+        page->setFollowing(true);page->setFollowing(false);page->setFollowing(true);QTRY_VERIFY(!page->followBusy());
+        QVERIFY(file.open(QIODevice::Append));file.write(extra);file.close();QTRY_COMPARE_WITH_TIMEOUT(page->editor->send(SCI_GETLENGTH),sptr_t(initial.size()+extra.size()),10000);
+        QTRY_VERIFY(!page->followBusy());QVERIFY(!page->followPaused());
+        const auto document=page->editor->send(SCI_GETDOCPOINTER);
+        QCOMPARE(QByteArray(reinterpret_cast<const char*>(page->editor->send(SCI_GETCHARACTERPOINTER)),page->editor->send(SCI_GETLENGTH)),initial+extra);
+        window.openPath(other);QTRY_VERIFY(window.allLoaded());QTest::qWait(100);
+        QVERIFY(file.open(QIODevice::Append));file.write("hidden append\n");file.close();QTest::qWait(650);QCOMPARE(page->editor->send(SCI_GETLENGTH),sptr_t(initial.size()+extra.size()));
+        window.openPath(path);QTRY_COMPARE(page->editor->send(SCI_GETLENGTH),sptr_t(initial.size()+extra.size()+14));QCOMPARE(page->editor->send(SCI_GETDOCPOINTER),document);
+        page->reload();QVERIFY(!page->following());QTRY_VERIFY(!page->loading);QVERIFY(page->ready);
+        page->setFollowing(true);QTRY_VERIFY(!page->followBusy());page->setEncoding("utf-8");QVERIFY(!page->following());QTRY_VERIFY(!page->loading);window.close();
+    }
+    void pickerKeepsDormantTabsLazy() {
+        QTemporaryDir directory;SessionSnapshot seed;
+        for(int i=0;i<80;++i)seed.tabs.append({directory.filePath(QString("file-%1.log").arg(i))});
+        for(int i:{0,79}){QFile file(seed.tabs[i].path);QVERIFY(file.open(QIODevice::WriteOnly));file.write("hello\n");}
+        seed.activePath=seed.tabs[0].path;const auto path=directory.filePath("session.json");QVERIFY(SessionStore(path).write(seed));
+        MainWindow window(true,path);window.show();window.restoreLastSession();QTRY_VERIFY(window.allLoaded());
+        QTimer::singleShot(40,&window,[&]{auto* dialog=window.findChild<FilePickerDialog*>();QVERIFY(dialog);QCOMPARE(window.findChildren<CodeEditor*>().size(),1);dialog->reject();});
+        window.showFilePicker();QCOMPARE(window.findChildren<CodeEditor*>().size(),1);
+        QTimer::singleShot(40,&window,[&]{auto* dialog=window.findChild<FilePickerDialog*>();QVERIFY(dialog);auto* input=dialog->findChild<QLineEdit*>();input->setText("file-79");QTest::keyClick(input,Qt::Key_Return);});
+        window.showFilePicker(true);QTRY_VERIFY(window.allLoaded());QCOMPARE(window.currentPage()->path,seed.tabs[79].path);
+        QCOMPARE(window.tabCount(),80);QCOMPARE(window.findChildren<CodeEditor*>().size(),2);
+        window.openPath(seed.tabs[0].path);window.closeTab(79);QCOMPARE(window.tabCount(),79);
+        QTimer::singleShot(40,&window,[&]{auto* dialog=window.findChild<FilePickerDialog*>();QVERIFY(dialog);auto* input=dialog->findChild<QLineEdit*>();input->setText("file-79");QTest::keyClick(input,Qt::Key_Return);});
+        window.currentPage()->editor->setFocus();QTest::keyClick(window.currentPage()->editor,Qt::Key_P,Qt::ControlModifier);
+        QTRY_VERIFY(window.allLoaded());QCOMPARE(window.tabCount(),80);QCOMPARE(window.currentPage()->path,seed.tabs[79].path);
+        window.close();
+    }
+    void pinnedTabsSurviveReorderCloseAndRestart() {
+        QTemporaryDir directory;SessionSnapshot seed;
+        for(int i=0;i<6;++i)seed.tabs.append({directory.filePath(QString("tab-%1.txt").arg(i))});
+        QFile file(seed.tabs[4].path);QVERIFY(file.open(QIODevice::WriteOnly));file.write("active file\n");file.close();
+        seed.activePath=seed.tabs[4].path;const auto path=directory.filePath("session.json");SessionStore store(path);QVERIFY(store.write(seed));
+        MainWindow window(true,path);window.show();window.restoreLastSession();QTRY_VERIFY(window.allLoaded());
+        auto* active=window.currentPage();window.setTabPinned(2,true);window.setTabPinned(4,true);
+        QCOMPARE(window.sessionSnapshot().tabs[0].path,seed.tabs[2].path);QVERIFY(window.isTabPinned(1));QCOMPARE(window.currentPage(),active);
+        QCOMPARE(window.findChildren<CodeEditor*>().size(),1);
+        auto* tabs=window.findChild<FileTabs*>();tabs->moveTab(0,5);QVERIFY(window.isTabPinned(0));QVERIFY(window.isTabPinned(1));QVERIFY(!window.isTabPinned(2));
+        QCOMPARE(window.currentPage(),active);window.closeTab(0);QCOMPARE(window.tabCount(),6);
+        QTest::mouseClick(tabs,Qt::MiddleButton,Qt::NoModifier,tabs->tabRect(0).center());QCOMPARE(window.tabCount(),6);
+        window.closeTabsToRight(3);QCOMPARE(window.tabCount(),4);QVERIFY(window.isTabPinned(0));
+        QVERIFY(window.saveSession());const auto saved=window.sessionSnapshot();window.close();
+        MainWindow reopened(true,path);reopened.show();reopened.restoreLastSession();QTRY_VERIFY(reopened.allLoaded());
+        QCOMPARE(reopened.sessionSnapshot().serialize(),saved.serialize());QCOMPARE(reopened.findChildren<CodeEditor*>().size(),1);
+        reopened.closeOtherTabs(2);QCOMPARE(reopened.tabCount(),3);reopened.closeAllTabs();QCOMPARE(reopened.tabCount(),2);
+        QVERIFY(reopened.isTabPinned(0));QVERIFY(reopened.isTabPinned(1));reopened.setTabPinned(0,false);reopened.setTabPinned(0,false);reopened.closeAllTabs();QCOMPARE(reopened.tabCount(),0);reopened.close();
+        const auto legacy=SessionSnapshot::deserialize(R"({"version":1,"tabs":[{"path":"C:/old.txt"}]})");QVERIFY(!legacy.tabs[0].pinned);
+    }
     void monospacedMeasurementPreservesCharacterPositions() {
         const auto text=QStringLiteral("ASCII fi => != 0123456789\t中文🙂 e\u0301\n").repeated(20).toUtf8();
         for(const auto& family:QStringList{"Cascadia Code","Consolas","Arial"}) {

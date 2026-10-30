@@ -14,6 +14,9 @@ public:
     explicit CodeEditor(QWidget* parent = nullptr);
     void setContent(const FileContent& content, const QString& path);
     void setPreparedContent(const PreparedFile& file,const QString& path);
+    bool appendLogText(const QByteArray& utf8,const QString& path,bool large);
+    bool atDocumentEnd() const;
+    void scrollToEnd();
     QString language() const { return language_; }
     void setWordWrap(bool on);
     void setPointSize(int points);
@@ -37,6 +40,7 @@ signals:
     void searchChanged();
     void positionChanged();
     void readingPositionChanged();
+    void verticalPositionChanged();
     void fileDropped(const QString& path);
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;

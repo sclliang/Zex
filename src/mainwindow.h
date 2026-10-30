@@ -1,5 +1,6 @@
 #pragma once
 #include "editor.h"
+#include "logreader.h"
 #include <QFileSystemWatcher>
 #include <QMainWindow>
 #include <QSettings>
@@ -24,6 +25,12 @@ public:
     void cancelLoad();
     int loadProgress() const { return control_?control_->percent.load():ready?100:0; }
     bool wasCanceled() const { return canceled_; }
+    void setFollowing(bool on);
+    void resumeFollowing();
+    bool following() const { return following_; }
+    bool followPaused() const { return followPaused_; }
+    bool followBusy() const { return followBusy_; }
+    QString followNotice() const { return followNotice_; }
     void activate();
     void setAppearance(const EditorAppearance& appearance);
     void setWordWrap(bool on);
@@ -38,11 +45,28 @@ public:
     bool loading = false;
     bool stale = false;
     bool attempted = false;
+    bool pinned = false;
 signals:
     void loaded();
     void editorCreated();
     void loadingChanged();
+    void followingChanged();
 private:
+    void setupFollowUi(QVBoxLayout* layout);
+    void pollFollow();
+    void applyLogUpdate(const std::shared_ptr<LogUpdate>& update,quint64 generation,qsizetype offset = 0);
+    void refreshFollowUi();
+    void trackFollowPosition();
+    QTimer followTimer_;
+    QWidget* followBar_ = nullptr;
+    QLabel* followLabel_ = nullptr;
+    QToolButton* resumeFollow_ = nullptr;
+    QToolButton* stopFollow_ = nullptr;
+    bool following_ = false,followPaused_ = false,followBusy_ = false,applyingFollow_ = false,followInitializing_ = false;
+    QString followNotice_;
+    std::shared_ptr<LogReader> logReader_;
+    LoadControlPtr followControl_;
+    quint64 followGeneration_ = 0;
     void ensureEditor();
     void applyPendingPosition();
     void updateLoadProgress();
@@ -70,6 +94,7 @@ class FileTabs : public QTabBar {
     Q_OBJECT
 public:
     explicit FileTabs(QWidget* parent = nullptr);
+    bool isPinned(int index) const;
 protected:
     QSize tabSizeHint(int index) const override;
     void paintEvent(QPaintEvent*) override;
@@ -94,9 +119,14 @@ public:
     int tabCount() const;
     void closeTab(int index);
     void closeAllTabs();
+    void closeOtherTabs(int index);
+    void closeTabsToRight(int index);
+    void setTabPinned(int index, bool pinned);
+    bool isTabPinned(int index) const;
     void showSearch();
     void hideSearch();
     void openFiles();
+    void showFilePicker(bool tabsOnly = false);
     bool allLoaded() const;
     void showAppearanceSettings();
     void applyAppearance(const EditorAppearance& appearance, const QString& iconTheme, const QString& colorTheme = {});
@@ -115,7 +145,8 @@ protected:
     bool nativeEvent(const QByteArray&, void*, qintptr*) override;
 private:
     FilePage* pageAt(int index) const;
-    FilePage* addPage(const QString& path, const ReadingPosition& position = {},const QString& encoding = "auto");
+    FilePage* addPage(const QString& path, const ReadingPosition& position = {},const QString& encoding = "auto", bool pinned = false);
+    void normalizePinnedTabs();
     void removeTab(int index, bool activateNext);
     void scheduleSessionSave();
     void buildTitleBar(QVBoxLayout* root);
@@ -160,11 +191,14 @@ private:
     QToolButton* whole_;
     QToolButton* wrapButton_;
     QToolButton* reloadButton_;
+    QToolButton* allTabsButton_;
+    QToolButton* followButton_;
     QToolButton* maximizeButton_ = nullptr;
     QToolButton* encodingButton_;
     QMenu* encodingMenu_;
     QMenu* recentMenu_;
     QAction* wrapAction_;
+    QAction* followAction_;
     QFileSystemWatcher fileWatcher_;
     QTimer searchDebounce_;
     QTimer sessionSaveTimer_;

@@ -26,5 +26,6 @@ struct FileContent {
 QStringList textEncodingIds();
 QString normalizedTextEncoding(const QString& encoding);
 QString textEncodingName(const QString& encoding);
+QString decodeLegacyText(QByteArrayView bytes,const QString& encoding,bool& valid);
 FileContent decodeFile(const QByteArray& bytes,const QString& encoding = "auto",const LoadControlPtr& control = {});
 FileContent readFile(const QString& path,const QString& encoding = "auto",const LoadControlPtr& control = {});

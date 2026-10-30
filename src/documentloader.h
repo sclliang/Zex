@@ -11,3 +11,4 @@ struct PreparedFile {
 };
 // The worker owns the unattached document until its completed result is handed off.
 PreparedFile prepareFile(const QString& path,const QString& encoding,const LoadControlPtr& control);
+PreparedFile prepareDocument(FileContent content,const LoadControlPtr& control);

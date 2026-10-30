@@ -85,6 +85,7 @@ CodeEditor::CodeEditor(QWidget* parent) : ScintillaEditBase(parent), colorTheme_
         updateBraces();
         emit positionChanged();
         if (static_cast<int>(updated) & (SC_UPDATE_SELECTION | SC_UPDATE_V_SCROLL | SC_UPDATE_H_SCROLL)) emit readingPositionChanged();
+        if (static_cast<int>(updated) & SC_UPDATE_V_SCROLL)emit verticalPositionChanged();
         if(navigating_ && (static_cast<int>(updated)&SC_UPDATE_SELECTION)
             && (send(SCI_GETCURRENTPOS)!=navigationCaret_ || send(SCI_GETANCHOR)!=navigationAnchor_))navigating_=false;
         if (!query_.isEmpty()) emit searchChanged();
@@ -116,6 +117,37 @@ void CodeEditor::setPreparedContent(const PreparedFile& file,const QString& path
     documentOwner_=file.document;
     send(SCI_SETCODEPAGE,SC_CP_UTF8);send(SCI_SETUNDOCOLLECTION,0);send(SCI_SETREADONLY,1);
     configureLanguage(path,file.content.large);send(SCI_GOTOPOS,0);updateMargins();
+}
+
+bool CodeEditor::appendLogText(const QByteArray& utf8,const QString& path,bool large) {
+    if(utf8.isEmpty())return true;
+    const auto oldLength=send(SCI_GETLENGTH);
+    send(SCI_SETSTATUS,SC_STATUS_OK);send(SCI_SETREADONLY,0);
+    send(SCI_APPENDTEXT,utf8.size(),reinterpret_cast<sptr_t>(utf8.constData()));send(SCI_SETREADONLY,1);
+    if(send(SCI_GETSTATUS)!=SC_STATUS_OK)return false;
+    if(large && lexer_!="null")configureLanguage(path,true);
+    updateMargins();
+    if(!query_.isEmpty()) {
+        // Re-scan only the boundary (including whole-word matches that may now extend).
+        auto from=qMax<sptr_t>(0,oldLength-query_.size()*16-4);
+        from=send(SCI_POSITIONBEFORE,send(SCI_POSITIONAFTER,from));
+        if(capped_ && !matches_.isEmpty() && matches_.last().second<from)return true;
+        if(counting_)from=qMin(from,scanAt_);
+        while(!matches_.isEmpty() && matches_.last().second>=from){from=qMin(from,matches_.last().first);matches_.removeLast();}
+        send(SCI_SETINDICATORCURRENT,searchIndicator);send(SCI_INDICATORCLEARRANGE,from,send(SCI_GETLENGTH)-from);
+        scanAt_=from;counting_=true;capped_=false;navigating_=false;searchTimer_.start();
+    }
+    return true;
+}
+bool CodeEditor::atDocumentEnd() const {
+    const auto last=qMax<sptr_t>(0,send(SCI_GETLINECOUNT)-1);
+    const auto end=send(SCI_VISIBLEFROMDOCLINE,last)+send(SCI_WRAPCOUNT,last);
+    return send(SCI_GETFIRSTVISIBLELINE)+qMax<sptr_t>(1,send(SCI_LINESONSCREEN))>=end;
+}
+void CodeEditor::scrollToEnd() {
+    const auto last=qMax<sptr_t>(0,send(SCI_GETLINECOUNT)-1);send(SCI_ENSUREVISIBLE,last);
+    const auto end=send(SCI_VISIBLEFROMDOCLINE,last)+send(SCI_WRAPCOUNT,last);
+    send(SCI_SETFIRSTVISIBLELINE,qMax<sptr_t>(0,end-qMax<sptr_t>(1,send(SCI_LINESONSCREEN))));
 }
 
 void CodeEditor::setPointSize(int points) {

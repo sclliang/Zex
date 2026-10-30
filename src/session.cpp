@@ -26,7 +26,7 @@ QByteArray SessionSnapshot::serialize() const {
         const auto& p = tab.position;
         QJsonObject position{{"topLine",p.topLine},{"wrapOffset",p.wrapOffset},{"xOffset",p.xOffset},
             {"caretLine",p.caretLine},{"caretColumn",p.caretColumn},{"anchorLine",p.anchorLine},{"anchorColumn",p.anchorColumn}};
-        items.append(QJsonObject{{"path",tab.path},{"position",position},{"encoding",normalizedTextEncoding(tab.encoding)}});
+        items.append(QJsonObject{{"path",tab.path},{"position",position},{"encoding",normalizedTextEncoding(tab.encoding)},{"pinned",tab.pinned}});
     }
     return QJsonDocument(QJsonObject{{"version",1},{"activePath",activePath},{"tabs",items}}).toJson(QJsonDocument::Compact);
 }
@@ -48,7 +48,7 @@ SessionSnapshot SessionSnapshot::deserialize(const QByteArray& bytes) {
         paths.insert(path.toCaseFolded());
         const auto p = item["position"].toObject();
         session.tabs.append({path, {nonnegative(p,"topLine"),int(nonnegative(p,"wrapOffset")),int(nonnegative(p,"xOffset")),
-            nonnegative(p,"caretLine"),nonnegative(p,"caretColumn"),nonnegative(p,"anchorLine"),nonnegative(p,"anchorColumn")},normalizedTextEncoding(item["encoding"].toString())});
+            nonnegative(p,"caretLine"),nonnegative(p,"caretColumn"),nonnegative(p,"anchorLine"),nonnegative(p,"anchorColumn")},normalizedTextEncoding(item["encoding"].toString()),item["pinned"].toBool()});
     }
     const auto active = QDir::cleanPath(QDir::fromNativeSeparators(root["activePath"].toString()));
     for (const auto& tab : session.tabs)
